@@ -9,3 +9,6 @@ spec:
   secretRef:
     name: ghcr-pull
   provider: generic
+  exclusionList:
+    - ^sha-.*$
+    - ^latest$

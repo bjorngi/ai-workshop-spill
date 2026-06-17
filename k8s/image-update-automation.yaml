@@ -1,0 +1,26 @@
+apiVersion: image.toolkit.fluxcd.io/v1beta2
+kind: ImageUpdateAutomation
+metadata:
+  name: plasseringsspillet
+  namespace: flux-system
+spec:
+  interval: 1m
+  sourceRef:
+    kind: GitRepository
+    name: plasseringsspillet
+  git:
+    checkout:
+      ref:
+        branch: main
+    commit:
+      authorName: Flux Bot
+      authorEmail: flux@stackunderflow.no
+      messageTemplate: |
+        Automated image update
+
+        Images:
+        {{ range .Updated.Images -}}
+        - {{.}}
+        {{ end -}}
+    push:
+      branch: main

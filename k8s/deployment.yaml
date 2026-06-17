@@ -17,7 +17,9 @@ spec:
     spec:
       containers:
       - name: plasseringsspillet
-        image: ghcr.io/bjorngi/ai-workshop-spill:latest
+        # Flux ImagePolicy marker — rewritten by ImageUpdateAutomation
+        # {"$imagepolicy": "flux-system:plasseringsspillet"}
+        image: ghcr.io/bjorngi/ai-workshop-spill:0.0.0-19700101000000.0000000
         imagePullPolicy: IfNotPresent
         ports:
         - name: http

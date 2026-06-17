@@ -299,7 +299,7 @@ export default function Home() {
       <header className="text-center">
         <h1 className="text-3xl font-extrabold text-gray-900 dark:text-white">
           Plasseringsspillet
-          <sup className="ml-0.5 align-super text-xs font-semibold">®™</sup>
+          <sup className="ml-0.5 align-super text-xl font-semibold">®™</sup>
         </h1>
         <p className="mt-1 text-sm text-gray-500 dark:text-gray-400">
           Plasser mysteriekortet riktig på rutenettet.

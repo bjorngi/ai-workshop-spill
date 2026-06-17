@@ -19,8 +19,8 @@ spec:
       messageTemplate: |
         Automated image update
 
-        Images:
-        {{ range .Changed.Images -}}
+        Updated images:
+        {{ range .Updated.Images -}}
         - {{.}}
         {{ end -}}
     push:

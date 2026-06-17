@@ -103,3 +103,13 @@ anchor dots in `Grid.tsx`, but **blue** (`bg-blue-500`). _Why:_ the big card bod
 cursor/finger and obscured the exact grid spot you were aiming for; the small dot makes placement
 precise. Idle (not dragging) it stays the normal big card. Safe because `useDrag` calls
 `setPointerCapture`, so the same element keeps receiving move/up events after it shrinks.
+
+## 2026-06-17 — Kubernetes deployment on plasseringsspillet.stackunderflow.no
+
+Added a minimal `k8s/` Kustomize overlay (namespace, deployment, service, HTTPRoute) for the
+cluster managed in the `stackunderflow.no` repo. The container is the existing static nginx build
+(`ghcr.io/bjorngi/ai-workshop-spill`), served on port 8080. The HTTPRoute attaches only to the
+new `plasseringsspillet-https` listener in the shared Gateway, leaving the global port-80
+HTTP→HTTPS redirect intact. No OIDC/PocketID protection: the game is a public static SPA.
+The Gateway listener and TLS secret were added to the infrastructure repo separately because the
+Gateway is shared cluster infrastructure, not per-app config.

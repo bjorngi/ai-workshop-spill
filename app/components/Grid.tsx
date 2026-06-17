@@ -5,7 +5,8 @@
 import { useRef } from "react";
 
 import type { Card, Placement, Theme } from "~/game/types";
-import { axisDomain, valueToFraction } from "~/game/scoring";
+import { axisDomain, axisTicks, valueToFraction } from "~/game/scoring";
+import { formatNumber } from "~/game/format";
 import { useDrag } from "~/components/useDrag";
 import { CurrentCard } from "~/components/CurrentCard";
 
@@ -55,6 +56,20 @@ export function Grid({
   const xDomain = axisDomain(theme, "x");
   const yDomain = axisDomain(theme, "y");
 
+  // Nice tick VALUES within each domain, plus their fractional positions.
+  const xTicks = axisTicks(xDomain.min, xDomain.max, theme.xAxis.scale).map(
+    (value) => ({
+      value,
+      f: valueToFraction(value, xDomain.min, xDomain.max, theme.xAxis.scale),
+    }),
+  );
+  const yTicks = axisTicks(yDomain.min, yDomain.max, theme.yAxis.scale).map(
+    (value) => ({
+      value,
+      f: valueToFraction(value, yDomain.min, yDomain.max, theme.yAxis.scale),
+    }),
+  );
+
   // While dragging, show the live position; otherwise the committed placement.
   const livePlacement = dragging && position ? position : placement;
 
@@ -66,22 +81,32 @@ export function Grid({
     : 0;
 
   return (
-    <div className="flex flex-col items-center gap-2">
-      {/* Y axis label */}
-      <div className="flex w-full justify-center">
-        <span className="text-sm font-semibold text-gray-700 dark:text-gray-200">
-          {theme.yAxis.label}
-          {theme.yAxis.unit ? ` (${theme.yAxis.unit})` : ""}
-          {theme.yAxis.scale === "log" ? " · log" : ""} ↑
-        </span>
-      </div>
+    <div className="flex items-center gap-2">
+      {/* Y axis label: vertical, reading bottom-to-top, centered on the plot. */}
+      <span className="text-sm font-semibold text-gray-700 [writing-mode:vertical-rl] rotate-180 dark:text-gray-200">
+        {theme.yAxis.label}
+        {theme.yAxis.unit ? ` (${theme.yAxis.unit})` : ""}
+        {theme.yAxis.scale === "log" ? " · log" : ""}
+      </span>
 
-      <div className="flex items-stretch gap-2">
-        {/* Y axis line */}
-        <div className="w-1 rounded bg-gray-300 dark:bg-gray-600" />
+      {/* Plot column: [y-ticks | plot] row, then x-ticks, then x label. */}
+      <div className="flex flex-col items-center gap-1">
+        <div className="flex items-stretch gap-1">
+          {/* Y tick labels, vertically centered on each gridline. */}
+          <div className="relative w-12 min-w-[2.5rem]">
+            {yTicks.map(({ value, f }) => (
+              <span
+                key={`yt${value}`}
+                className="absolute right-0 -translate-y-1/2 pr-1 text-[10px] tabular-nums text-gray-500 dark:text-gray-400"
+                style={{ bottom: pct(f) }}
+              >
+                {formatNumber(value)}
+              </span>
+            ))}
+          </div>
 
-        {/* The plot itself */}
-        <div
+          {/* The plot itself */}
+          <div
           ref={plotRef}
           className="relative rounded-xl border border-gray-300 bg-gradient-to-br from-slate-50 to-slate-100 shadow-inner dark:border-gray-700 dark:from-gray-900 dark:to-gray-800"
           style={{
@@ -89,19 +114,26 @@ export function Grid({
             height: "min(80vw, 560px)",
           }}
         >
-          {/* Subtle grid lines */}
-          {[0.25, 0.5, 0.75].map((f) => (
-            <div key={`h${f}`}>
+          {/* Subtle grid lines aligned to tick values. Skip the edges (0/1)
+              since the plot border already draws them. */}
+          {yTicks.map(({ value, f }) =>
+            f <= 0 || f >= 1 ? null : (
               <div
+                key={`h${value}`}
                 className="absolute left-0 right-0 border-t border-dashed border-gray-200 dark:border-gray-700"
                 style={{ bottom: pct(f) }}
               />
+            ),
+          )}
+          {xTicks.map(({ value, f }) =>
+            f <= 0 || f >= 1 ? null : (
               <div
+                key={`v${value}`}
                 className="absolute bottom-0 top-0 border-l border-dashed border-gray-200 dark:border-gray-700"
                 style={{ left: pct(f) }}
               />
-            </div>
-          ))}
+            ),
+          )}
 
           {/* Anchor dots */}
           {anchors.map((a) => {
@@ -190,18 +222,30 @@ export function Grid({
               </span>
             </div>
           )}
+          </div>
         </div>
-      </div>
 
-      {/* X axis line + label */}
-      <div className="flex items-center gap-2" style={{ width: "min(80vw, 560px)" }}>
-        <div className="h-1 flex-1 rounded bg-gray-300 dark:bg-gray-600" />
+        {/* X tick labels, horizontally centered on each gridline. Same width
+            as the plot so fractions line up. */}
+        <div className="relative h-5" style={{ width: "min(80vw, 560px)" }}>
+          {xTicks.map(({ value, f }) => (
+            <span
+              key={`xt${value}`}
+              className="absolute top-0 -translate-x-1/2 text-[10px] tabular-nums text-gray-500 dark:text-gray-400"
+              style={{ left: pct(f) }}
+            >
+              {formatNumber(value)}
+            </span>
+          ))}
+        </div>
+
+        {/* X axis label, centered below the ticks. */}
+        <span className="text-sm font-semibold text-gray-700 dark:text-gray-200">
+          {theme.xAxis.label}
+          {theme.xAxis.unit ? ` (${theme.xAxis.unit})` : ""}
+          {theme.xAxis.scale === "log" ? " · log" : ""}
+        </span>
       </div>
-      <span className="text-sm font-semibold text-gray-700 dark:text-gray-200">
-        → {theme.xAxis.label}
-        {theme.xAxis.unit ? ` (${theme.xAxis.unit})` : ""}
-        {theme.xAxis.scale === "log" ? " · log" : ""}
-      </span>
     </div>
   );
 }

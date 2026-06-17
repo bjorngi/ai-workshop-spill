@@ -1,9 +1,10 @@
 import type { Config } from "@react-router/dev/config";
 
 export default {
-  // Config options...
-  // Server-side render by default, to enable SPA mode set this to `false`
-  ssr: true,
+  // SPA mode: the game is fully client-side (WebRTC, pointer drag, in-memory
+  // state) with no server data needs. Avoids SSR/hydration issues with
+  // browser-only APIs like RTCPeerConnection. See DECISIONS.md.
+  ssr: false,
   future: {
     v8_middleware: true,
     v8_passThroughRequests: true,

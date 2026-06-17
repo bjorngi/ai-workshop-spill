@@ -87,3 +87,12 @@ mechanics as multiplayer, just no opponent and no `PeerLink`.
 Per user direction, we skip a test framework entirely ("rawdog it"). Correctness is checked
 via `npm run typecheck` and manual two-window play-testing. Game-core functions are still kept
 pure so they can be tested later if desired.
+
+## 2026-06-17 — Dragged mystery card shrinks to a placed-card dot
+
+While being dragged, the mystery card (`CurrentCard`) no longer shows the big indigo token —
+it morphs into the compact placed-card form (a small dot + truncated title label), mirroring the
+anchor dots in `Grid.tsx`, but **blue** (`bg-blue-500`). _Why:_ the big card body sat under the
+cursor/finger and obscured the exact grid spot you were aiming for; the small dot makes placement
+precise. Idle (not dragging) it stays the normal big card. Safe because `useDrag` calls
+`setPointerCapture`, so the same element keeps receiving move/up events after it shrinks.

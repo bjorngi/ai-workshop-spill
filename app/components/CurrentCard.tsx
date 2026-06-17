@@ -20,13 +20,31 @@ export function CurrentCard({
   dragging,
   placed,
 }: CurrentCardProps) {
+  // While being dragged, shrink to a compact placed-card form (dot + label) so
+  // it doesn't obscure the grid spot you're aiming for. Mirrors the anchor dots
+  // in Grid.tsx, but blue. Pointer capture (useDrag) keeps drag working on the
+  // same element even after it shrinks.
+  if (dragging) {
+    return (
+      <div
+        {...dragHandlers}
+        className="flex cursor-grabbing select-none flex-col items-center"
+        style={dragHandlers?.style}
+      >
+        <div className="h-3 w-3 rounded-full bg-blue-500 ring-2 ring-white dark:ring-gray-900" />
+        <span className="mt-0.5 max-w-[7rem] truncate rounded bg-white/80 px-1 text-[10px] font-medium text-gray-700 dark:bg-gray-800/80 dark:text-gray-200">
+          {card.title}
+        </span>
+      </div>
+    );
+  }
+
   return (
     <div
       {...dragHandlers}
       className={[
         "select-none rounded-xl border-2 px-4 py-3 text-center shadow-lg transition",
         "border-indigo-400 bg-indigo-500 text-white",
-        dragging ? "scale-105 cursor-grabbing shadow-2xl ring-4 ring-indigo-300" : "",
         placed ? "opacity-60" : "cursor-grab hover:scale-105",
       ].join(" ")}
       style={dragHandlers?.style}

@@ -5,9 +5,15 @@
 import { useRef } from "react";
 
 import { gsap, useGSAP, prefersReducedMotion } from "~/anim/gsap";
+import { celebrateResult } from "~/anim/confetti";
 import { playSound } from "~/audio/useSound";
 import type { Card, Placement, Theme } from "~/game/types";
-import { axisDomain, fractionToValue, type PlacementScore } from "~/game/scoring";
+import {
+  axisAccuracy,
+  axisDomain,
+  fractionToValue,
+  type PlacementScore,
+} from "~/game/scoring";
 import { formatValue } from "~/game/format";
 
 interface RoundResultProps {
@@ -78,6 +84,12 @@ export function RoundResult({
   useGSAP(
     () => {
       playSound(outcome === "win" ? "win" : outcome === "loss" ? "lose" : "reveal");
+
+      // Emoji confetti scaled by how close the placement was (avg axis accuracy,
+      // 0 = total miss → sad face, 1 = bang on → eggplant).
+      const quality =
+        (axisAccuracy(myScore.xError) + axisAccuracy(myScore.yError)) / 2;
+      celebrateResult(quality);
 
       const reduced = prefersReducedMotion();
       root.current?.scrollIntoView({

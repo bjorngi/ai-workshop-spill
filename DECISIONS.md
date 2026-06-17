@@ -202,6 +202,17 @@ immediately. _Rule:_ when using `gsap.matchMedia()` inside `useGSAP`, revert it 
 useGSAP cleanup (`return () => mm.revert()` at the end of the hook callback), never as the value
 returned by an `mm.add()` callback. (StageBackground and the logo already followed this.)
 
+## 2026-06-17 — Emoji confetti on every round reveal, scaled by accuracy
+
+Added `canvas-confetti` (+ `@types/canvas-confetti`). `app/anim/confetti.ts` exports
+`celebrateResult(quality)` which fires emoji-shaped confetti (`confetti.shapeFromText`) from the
+two lower corners on every reveal in `RoundResult.tsx`. The emoji set is chosen from a tier ladder
+keyed on placement quality in [0,1] — the average of `axisAccuracy(xError)`/`axisAccuracy(yError)`
+— climbing from sad faces (😢😭💀) through neutral/decent up to the eggplant tier (🍆💦🎉🥵) for a
+near-perfect drop. Particle count, spread and velocity also scale with quality. Browser-only and
+guarded by `prefersReducedMotion()` + `disableForReducedMotion`. _Why:_ user wanted a celebratory
+result reaction whose emoji reflect how good the placement was, "from sad face to eggplant".
+
 ## 2026-06-17 — Kubernetes deployment on plasseringsspillet.stackunderflow.no
 
 Added a minimal `k8s/` Kustomize overlay (namespace, deployment, service, HTTPRoute) for the

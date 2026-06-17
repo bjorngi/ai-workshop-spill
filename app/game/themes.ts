@@ -5,6 +5,22 @@ import type { Theme } from "~/game/types";
 
 export const THEMES: Theme[] = [
   {
+    id: "test",
+    name: "Testdata",
+    description:
+      "Liten datasett for testing. Enkle, forutsigbare verdier på begge akser.",
+    xAxis: { label: "X-verdi", scale: "linear" },
+    yAxis: { label: "Y-verdi", scale: "linear" },
+    seedAnchorIds: ["t-a", "t-c", "t-e"],
+    cards: [
+      { id: "t-a", title: "A", x: 1, y: 1, blurb: "Test A: x=1, y=1." },
+      { id: "t-b", title: "B", x: 2, y: 2, blurb: "Test B: x=2, y=2." },
+      { id: "t-c", title: "C", x: 3, y: 3, blurb: "Test C: x=3, y=3." },
+      { id: "t-d", title: "D", x: 4, y: 4, blurb: "Test D: x=4, y=4." },
+      { id: "t-e", title: "E", x: 5, y: 5, blurb: "Test E: x=5, y=5." },
+    ],
+  },
+  {
     id: "ol-utovere",
     name: "Norske OL-utøvere",
     description: "Plasser utøveren etter antall OL-gull og høyde.",

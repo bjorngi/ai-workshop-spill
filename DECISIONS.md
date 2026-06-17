@@ -88,6 +88,13 @@ Per user direction, we skip a test framework entirely ("rawdog it"). Correctness
 via `npm run typecheck` and manual two-window play-testing. Game-core functions are still kept
 pure so they can be tested later if desired.
 
+## 2026-06-17 — "Testdata" theme for manual testing
+
+Added a minimal theme `id: "test"` ("Testdata") as the first entry in `THEMES`. Five cards A–E
+with trivially predictable values (x=y=1..5), seed anchors A/C/E. _Why:_ gives a tiny,
+easy-to-reason-about board for manually verifying placement, scoring, and drag behavior without
+the noise of the real themes' values.
+
 ## 2026-06-17 — Dragged mystery card shrinks to a placed-card dot
 
 While being dragged, the mystery card (`CurrentCard`) no longer shows the big indigo token —

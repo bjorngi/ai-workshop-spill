@@ -18,10 +18,5 @@ spec:
         email: flux@stackunderflow.no
       messageTemplate: |
         Automated image update
-
-        Updated images:
-        {{ range .Changed.Images -}}
-        - {{.}}
-        {{ end -}}
     push:
       branch: main

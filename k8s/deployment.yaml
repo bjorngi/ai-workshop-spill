@@ -19,7 +19,7 @@ spec:
       - name: ghcr-pull
       containers:
       - name: plasseringsspillet
-        image: ghcr.io/bjorngi/ai-workshop-spill:sha-f63ecbdd43ad22ffc67b05628994d4f44809d1a6 # {"$imagepolicy": "flux-system:plasseringsspillet"}
+        image: ghcr.io/bjorngi/ai-workshop-spill:20260617124156-0e39d40 # {"$imagepolicy": "flux-system:plasseringsspillet"}
         imagePullPolicy: IfNotPresent
         ports:
         - name: http

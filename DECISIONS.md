@@ -212,6 +212,9 @@ keyed on placement quality in [0,1] — the average of `axisAccuracy(xError)`/`a
 near-perfect drop. Particle count, spread and velocity also scale with quality. Browser-only and
 guarded by `prefersReducedMotion()` + `disableForReducedMotion`. _Why:_ user wanted a celebratory
 result reaction whose emoji reflect how good the placement was, "from sad face to eggplant".
+Tuned per user feedback to a single burst from the middle of the screen (`origin {0.5,0.5}`),
+bigger emojis (`scalar: 4`) and slow/floaty motion (low `startVelocity`, `gravity: 0.4`,
+`ticks: 400`) so the emojis are easy to read.
 
 ## 2026-06-17 — Kubernetes deployment on plasseringsspillet.stackunderflow.no
 

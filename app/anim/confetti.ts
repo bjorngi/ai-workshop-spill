@@ -34,27 +34,26 @@ export function celebrateResult(quality: number): void {
   if (prefersReducedMotion()) return;
 
   const emojis = emojisForQuality(quality);
+  const scalar = 4; // big emojis so they're easy to read
   const shapes = emojis.map((char) =>
-    confetti.shapeFromText({ text: char, scalar: 2.5 }),
+    confetti.shapeFromText({ text: char, scalar }),
   );
 
-  // Better results get a bigger, livelier burst.
-  const particleCount = Math.round(20 + quality * 60);
-  const spread = 60 + quality * 40;
+  // Better results get a slightly fuller burst.
+  const particleCount = Math.round(14 + quality * 26);
 
-  const fire = (originX: number) =>
-    confetti({
-      particleCount,
-      spread,
-      startVelocity: 35 + quality * 25,
-      scalar: 2.5,
-      ticks: 200,
-      shapes,
-      origin: { x: originX, y: 0.7 },
-      disableForReducedMotion: true,
-    });
-
-  // Two angled bursts from the lower corners so it rains across the screen.
-  fire(0.2);
-  fire(0.8);
+  // One gentle burst from the middle of the screen. Low velocity + low gravity
+  // + long lifetime so the emojis float slowly and stay readable.
+  confetti({
+    particleCount,
+    spread: 70,
+    startVelocity: 22 + quality * 10,
+    gravity: 0.4,
+    decay: 0.92,
+    ticks: 400,
+    scalar,
+    shapes,
+    origin: { x: 0.5, y: 0.5 },
+    disableForReducedMotion: true,
+  });
 }

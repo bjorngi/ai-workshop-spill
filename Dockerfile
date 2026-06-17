@@ -1,6 +1,6 @@
 # syntax=docker/dockerfile:1
 
-# --- Build the SPA static assets ---------------------------------------------
+# --- Build the SSR server + client assets ------------------------------------
 FROM node:20-alpine AS build
 WORKDIR /app
 
@@ -8,18 +8,26 @@ WORKDIR /app
 COPY package.json package-lock.json ./
 RUN npm ci
 
-# Build the client bundle. With ssr:false, React Router emits a static SPA into
-# build/client (index.html + hashed assets); there is no server to run.
+# Build the app. With ssr:true, React Router emits BOTH build/server (the SSR
+# entry served by react-router-serve) and build/client (hashed browser assets).
 COPY . .
 RUN npm run build
 
-# --- Serve the static client build with nginx --------------------------------
-FROM nginx:1.27-alpine AS runtime
+# --- Run the Node SSR server (react-router-serve, no more nginx) -------------
+FROM node:20-alpine AS runtime
+WORKDIR /app
 
-# SPA-aware config: unknown routes fall back to index.html so client-side
-# routing works on deep links / refresh.
-COPY nginx.conf /etc/nginx/conf.d/default.conf
-COPY --from=build /app/build/client /usr/share/nginx/html
+# Install only production deps so @react-router/serve + node runtime deps are
+# present to actually run the server.
+COPY package.json package-lock.json ./
+RUN npm ci --omit=dev
 
+# Bring in the built server + client output from the build stage.
+COPY --from=build /app/build ./build
+
+# react-router-serve listens on $PORT; pin it to 8080 to match the Service/HTTPRoute.
+ENV PORT=8080
 EXPOSE 8080
-# The base image's default CMD (nginx -g "daemon off;") starts the server.
+
+# "npm run start" -> react-router-serve ./build/server/index.js
+CMD ["npm", "run", "start"]

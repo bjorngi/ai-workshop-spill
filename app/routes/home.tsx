@@ -1,16 +1,18 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 
 import type { Route } from "./+types/home";
-import type { Card, NetMessage, Placement, Theme } from "~/game/types";
+import type {
+  Card,
+  NetMessage,
+  Placement,
+  PlacementEntry,
+  PlayerInfo,
+  Theme,
+} from "~/game/types";
 import { buildDeck, cardsByIds } from "~/game/deck";
 import { getTheme } from "~/game/themes";
-import {
-  compareScores,
-  roundPoints,
-  scorePlacement,
-  type PlacementScore,
-} from "~/game/scoring";
-import { usePeer } from "~/net/usePeer";
+import { roundPoints, scorePlacement } from "~/game/scoring";
+import { makeRoomCode, useRoom } from "~/net/useRoom";
 
 import { Grid } from "~/components/Grid";
 import { Scoreboard } from "~/components/Scoreboard";
@@ -41,8 +43,22 @@ type Screen =
   | "reveal"
   | "gameover";
 
+/** Pid used for the local player in single-player mode. */
+const SINGLE_PID = "me";
+
+// --- placement map <-> wire entries -----------------------------------------
+
+function toEntries(m: Record<string, Placement>): PlacementEntry[] {
+  return Object.entries(m).map(([pid, placement]) => ({ pid, placement }));
+}
+function fromEntries(es: PlacementEntry[]): Record<string, Placement> {
+  const out: Record<string, Placement> = {};
+  for (const e of es) out[e.pid] = e.placement;
+  return out;
+}
+
 export default function Home() {
-  const peer = usePeer();
+  const room = useRoom();
 
   const [screen, setScreen] = useState<Screen>("setup");
   const [mode, setMode] = useState<Mode | null>(null);
@@ -53,26 +69,63 @@ export default function Home() {
   const [mystery, setMystery] = useState<Card[]>([]);
   const [round, setRound] = useState(0);
 
-  // Placements for the current round
-  const [myPlacement, setMyPlacement] = useState<Placement | null>(null);
-  const [oppPlacement, setOppPlacement] = useState<Placement | null>(null);
+  // The current draggable (uncommitted) placement.
+  const [myDraft, setMyDraft] = useState<Placement | null>(null);
 
-  // Scores
-  const [myScore, setMyScore] = useState(0);
-  const [oppScore, setOppScore] = useState(0);
+  // Committed placements for the current round, keyed by player id. Mirrored in
+  // a ref so the (once-registered) network handler always sees the latest map.
+  const [roundPlacements, setRoundPlacements] = useState<
+    Record<string, Placement>
+  >({});
+  const placementsRef = useRef<Record<string, Placement>>({});
+  const setPlacements = useCallback((next: Record<string, Placement>) => {
+    placementsRef.current = next;
+    setRoundPlacements(next);
+  }, []);
+  const recordPlacement = useCallback(
+    (pid: string, p: Placement) => {
+      const next = { ...placementsRef.current, [pid]: p };
+      placementsRef.current = next;
+      setRoundPlacements(next);
+      return next;
+    },
+    [],
+  );
 
-  // Names
+  // Cumulative scores keyed by pid (computed locally and deterministically).
+  const [scores, setScores] = useState<Record<string, number>>({});
+
+  // Names + room code
   const [myName, setMyName] = useState("");
-  const [oppName, setOppName] = useState("");
+  const [roomCode, setRoomCode] = useState("");
 
-  // Refs mirroring state for the network message handler (which captures
-  // values at registration time otherwise).
+  // --- derived players ------------------------------------------------------
+
+  const myPid = mode === "single" ? SINGLE_PID : room.myPid;
+  const roster: PlayerInfo[] =
+    mode === "single"
+      ? [{ pid: SINGLE_PID, name: myName || "Du" }]
+      : room.roster;
+
+  const current = mystery[round] ?? null;
+  const committedMine = roundPlacements[myPid] ?? null;
+  const committed = mode !== "single" && !!committedMine;
+
+  // Refs mirroring state for the network message handler.
   const stateRef = useRef({
     mode,
     round,
     totalRounds: 0,
+    role: room.role,
+    mystery,
   });
-  stateRef.current = { mode, round, totalRounds: mystery.length };
+  stateRef.current = {
+    mode,
+    round,
+    totalRounds: mystery.length,
+    role: room.role,
+    mystery,
+  };
 
   // --- board helpers --------------------------------------------------------
 
@@ -82,131 +135,141 @@ export default function Home() {
       setAnchors(cardsByIds(t, anchorIds));
       setMystery(cardsByIds(t, mysteryOrder));
       setRound(0);
-      setMyPlacement(null);
-      setOppPlacement(null);
-      setMyScore(0);
-      setOppScore(0);
+      setMyDraft(null);
+      setPlacements({});
+      setScores({});
     },
-    [],
+    [setPlacements],
   );
 
   // --- network message handling --------------------------------------------
 
   useEffect(() => {
-    peer.setOnMessage((msg: NetMessage) => {
+    room.setOnMessage((msg: NetMessage, fromPid: string) => {
       const s = stateRef.current;
       switch (msg.type) {
-        case "hello":
-          setOppName(msg.name);
-          break;
         case "start": {
-          // Guest builds the identical board from the host's message.
+          // Guests build the identical board from the host's message.
           const t = getTheme(msg.themeId);
           if (!t) return;
-          setOppName(msg.hostName);
           startBoard(t, msg.anchorIds, msg.mysteryOrder);
           setScreen("play");
           break;
         }
         case "place": {
-          // Opponent's placement for some round. Only the current round matters.
-          if (msg.round === s.round) {
-            setOppPlacement(msg.placement);
-          }
+          // Host records a guest's placement, then re-broadcasts the full set.
+          if (s.role !== "host") return;
+          if (msg.round !== s.round) return;
+          const next = recordPlacement(fromPid, msg.placement);
+          room.broadcast({
+            type: "placements",
+            round: s.round,
+            entries: toEntries(next),
+          });
+          break;
+        }
+        case "placements": {
+          // Guests mirror the authoritative current-round placement set.
+          if (msg.round !== s.round) return;
+          setPlacements(fromEntries(msg.entries));
           break;
         }
         case "next": {
-          // Host advanced; guest follows.
+          // Host advanced; guests follow + grow anchors with the revealed card.
+          const justPlayed = s.mystery[s.round];
+          if (justPlayed) setAnchors((a) => [...a, justPlayed]);
+          setMyDraft(null);
+          setPlacements({});
           setRound(msg.round);
-          setMyPlacement(null);
-          setOppPlacement(null);
           setScreen(msg.round >= s.totalRounds ? "gameover" : "play");
           break;
         }
       }
     });
-  }, [peer, startBoard]);
+  }, [room, startBoard, recordPlacement, setPlacements]);
 
-  // When connected and in a multiplayer flow, exchange names + move to lobby.
+  // Guest: once the channel is up, move from the connect screen to the lobby.
   useEffect(() => {
-    if (peer.state !== "connected") return;
-    if (mode !== "host" && mode !== "guest") return;
-    // Send our name once connected.
-    try {
-      peer.send({ type: "hello", name: myName || "Spiller" });
-    } catch {
-      /* not open yet */
+    if (mode === "guest" && screen === "connect" && room.status === "connected") {
+      setScreen("lobby");
     }
-    if (screen === "connect") setScreen("lobby");
-  }, [peer.state, mode, screen, myName, peer]);
+  }, [mode, screen, room.status]);
 
-  // --- reveal gating --------------------------------------------------------
+  // --- reveal gating + scoring ---------------------------------------------
 
-  const current = mystery[round] ?? null;
-
-  // Multiplayer: reveal as soon as both placements are in.
+  // Multiplayer: reveal once every player in the roster has placed.
   useEffect(() => {
-    if (screen !== "play") return;
-    if (mode === "single") return;
-    if (myPlacement && oppPlacement) {
-      setScreen("reveal");
+    if (screen !== "play" || mode === "single") return;
+    const pids = roster.map((r) => r.pid);
+    if (pids.length === 0) return;
+    if (pids.every((pid) => roundPlacements[pid])) setScreen("reveal");
+  }, [screen, mode, roundPlacements, roster]);
+
+  // Award the round point(s) to the closest placement(s), once per round.
+  const awardedRef = useRef<number>(-1);
+  useEffect(() => {
+    if (screen !== "reveal" || mode === "single") return;
+    if (!theme || !current) return;
+    if (awardedRef.current === round) return;
+    const pids = roster.map((r) => r.pid).filter((pid) => roundPlacements[pid]);
+    if (pids.length === 0) return;
+    awardedRef.current = round;
+
+    let best = Infinity;
+    const totals: Record<string, number> = {};
+    for (const pid of pids) {
+      const sc = scorePlacement(current, theme, roundPlacements[pid]);
+      totals[pid] = sc.total;
+      if (sc.total < best) best = sc.total;
     }
-  }, [screen, mode, myPlacement, oppPlacement]);
+    const winners = pids.filter((pid) => Math.abs(totals[pid] - best) < 1e-9);
+    setScores((prev) => {
+      const next = { ...prev };
+      for (const w of winners) next[w] = (next[w] ?? 0) + 1;
+      return next;
+    });
+  }, [screen, mode, round, theme, current, roster, roundPlacements]);
 
   // --- actions --------------------------------------------------------------
 
   const chooseMode = (m: Mode) => {
     setMode(m);
     if (m === "single") {
-      setMyName("Du");
+      setMyName((n) => n || "Du");
       setScreen("lobby");
+    } else if (m === "host") {
+      setRoomCode(makeRoomCode());
+      setScreen("connect");
     } else {
       setScreen("connect");
     }
   };
 
   const onPlace = (p: Placement) => {
-    setMyPlacement(p);
+    if (committed) return; // already locked in this round
+    setMyDraft(p);
   };
 
   const lockIn = () => {
-    if (!myPlacement || !theme || !current) return;
+    if (!myDraft || !theme || !current) return;
     if (mode === "single") {
-      const score = scorePlacement(current, theme, myPlacement);
-      setMyScore((s) => s + roundPoints(score));
+      const sc = scorePlacement(current, theme, myDraft);
+      setScores((prev) => ({
+        ...prev,
+        [SINGLE_PID]: (prev[SINGLE_PID] ?? 0) + roundPoints(sc),
+      }));
+      recordPlacement(SINGLE_PID, myDraft);
       setScreen("reveal");
+      return;
+    }
+    // Multiplayer: commit my placement and share it.
+    const next = recordPlacement(myPid, myDraft);
+    if (room.role === "host") {
+      room.broadcast({ type: "placements", round, entries: toEntries(next) });
     } else {
-      // Multiplayer: send placement; reveal happens when both are in.
-      try {
-        peer.send({ type: "place", round, placement: myPlacement });
-      } catch {
-        /* ignore */
-      }
+      room.sendToHost({ type: "place", round, placement: myDraft });
     }
   };
-
-  // Compute current round's scores at reveal.
-  const myRoundScore: PlacementScore | null =
-    current && theme && myPlacement
-      ? scorePlacement(current, theme, myPlacement)
-      : null;
-  const oppRoundScore: PlacementScore | null =
-    current && theme && oppPlacement && mode !== "single"
-      ? scorePlacement(current, theme, oppPlacement)
-      : null;
-
-  // Award the multiplayer point exactly once when we enter reveal.
-  const awardedRef = useRef<number>(-1);
-  useEffect(() => {
-    if (screen !== "reveal") return;
-    if (mode === "single") return;
-    if (!myRoundScore || !oppRoundScore) return;
-    if (awardedRef.current === round) return;
-    awardedRef.current = round;
-    const cmp = compareScores(myRoundScore, oppRoundScore);
-    if (cmp === "a") setMyScore((s) => s + 1);
-    else if (cmp === "b") setOppScore((s) => s + 1);
-  }, [screen, mode, myRoundScore, oppRoundScore, round]);
 
   const advance = () => {
     if (!current) return;
@@ -214,63 +277,40 @@ export default function Home() {
     const isOver = nextRound >= mystery.length;
 
     if (mode === "single") {
-      // Append revealed card to anchors so the board grows.
       setAnchors((a) => [...a, current]);
-      setMyPlacement(null);
+      setMyDraft(null);
+      setPlacements({});
       setRound(nextRound);
       setScreen(isOver ? "gameover" : "play");
       return;
     }
 
     // Multiplayer: only the host drives advancement.
-    if (mode === "host") {
+    if (room.role === "host") {
       setAnchors((a) => [...a, current]);
-      setMyPlacement(null);
-      setOppPlacement(null);
+      setMyDraft(null);
+      setPlacements({});
       setRound(nextRound);
       setScreen(isOver ? "gameover" : "play");
-      try {
-        peer.send({ type: "next", round: nextRound });
-      } catch {
-        /* ignore */
-      }
+      room.broadcast({ type: "next", round: nextRound });
     }
-    // Guest: the "next" message handler will advance and also grow anchors.
+    // Guests follow via the "next" message.
   };
 
-  // Guest grows anchors when it advances via the "next" message. We mirror that
-  // by appending the just-revealed card whenever round increments past a reveal.
-  const prevRoundRef = useRef(0);
-  useEffect(() => {
-    if (mode !== "guest") {
-      prevRoundRef.current = round;
-      return;
-    }
-    if (round > prevRoundRef.current) {
-      const justPlayed = mystery[prevRoundRef.current];
-      if (justPlayed) setAnchors((a) => [...a, justPlayed]);
-      prevRoundRef.current = round;
-    }
-  }, [round, mode, mystery]);
-
   const startMultiplayerGame = (t: Theme) => {
-    // HOST only. Generate seed in the event handler.
+    // HOST only. Lock the roster and deal the deck.
     const seed = Date.now();
     const { anchorIds, mysteryOrder } = buildDeck(t, seed);
+    room.stopAccepting();
     startBoard(t, anchorIds, mysteryOrder);
     setScreen("play");
-    try {
-      peer.send({
-        type: "start",
-        themeId: t.id,
-        seed,
-        anchorIds,
-        mysteryOrder,
-        hostName: myName || "Vert",
-      });
-    } catch {
-      /* ignore */
-    }
+    room.broadcast({
+      type: "start",
+      themeId: t.id,
+      seed,
+      anchorIds,
+      mysteryOrder,
+    });
   };
 
   const startSingleGame = (t: Theme) => {
@@ -279,20 +319,25 @@ export default function Home() {
     setScreen("play");
   };
 
+  const backToSetup = () => {
+    room.reset();
+    setMode(null);
+    setRoomCode("");
+    setScreen("setup");
+  };
+
   const playAgain = () => {
-    if (mode !== "single") peer.reset();
+    if (mode !== "single") room.reset();
     setMode(null);
     setTheme(null);
     setAnchors([]);
     setMystery([]);
     setRound(0);
-    setMyPlacement(null);
-    setOppPlacement(null);
-    setMyScore(0);
-    setOppScore(0);
-    setOppName("");
+    setMyDraft(null);
+    setPlacements({});
+    setScores({});
+    setRoomCode("");
     awardedRef.current = -1;
-    prevRoundRef.current = 0;
     setScreen("setup");
   };
 
@@ -354,8 +399,77 @@ export default function Home() {
   // Final sting on game over.
   useEffect(() => {
     if (screen !== "gameover") return;
-    playSound(mode === "single" || myScore >= oppScore ? "win" : "lose");
-  }, [screen, mode, myScore, oppScore]);
+    const myScore = scores[myPid] ?? 0;
+    const topScore = Math.max(0, ...roster.map((r) => scores[r.pid] ?? 0));
+    playSound(mode === "single" || myScore >= topScore ? "win" : "lose");
+  }, [screen, mode, scores, myPid, roster]);
+
+  // --- render helpers -------------------------------------------------------
+
+  const playersForBoard = roster.map((r) => ({
+    pid: r.pid,
+    name: r.name,
+    score: scores[r.pid] ?? 0,
+  }));
+
+  const gridOthers =
+    screen === "reveal"
+      ? roster
+          .filter((r) => r.pid !== myPid && roundPlacements[r.pid])
+          .map((r) => ({
+            pid: r.pid,
+            name: r.name,
+            placement: roundPlacements[r.pid],
+          }))
+      : undefined;
+
+  // Reveal summary (my score, round winners, per-player ✓ counts).
+  let revealData:
+    | {
+        myScore: ReturnType<typeof scorePlacement>;
+        roundPoints?: number;
+        winnerNames?: string[];
+        iWon?: boolean;
+        others?: { name: string; correctCount: number }[];
+      }
+    | null = null;
+  if (screen === "reveal" && theme && current && committedMine) {
+    const myScoreObj = scorePlacement(current, theme, committedMine);
+    if (mode === "single") {
+      revealData = { myScore: myScoreObj, roundPoints: roundPoints(myScoreObj) };
+    } else {
+      const pids = roster
+        .map((r) => r.pid)
+        .filter((pid) => roundPlacements[pid]);
+      const totals: Record<string, number> = {};
+      let best = Infinity;
+      for (const pid of pids) {
+        const sc = scorePlacement(current, theme, roundPlacements[pid]);
+        totals[pid] = sc.total;
+        if (sc.total < best) best = sc.total;
+      }
+      const winnerPids = pids.filter(
+        (pid) => Math.abs(totals[pid] - best) < 1e-9,
+      );
+      const nameOf = (pid: string) =>
+        roster.find((r) => r.pid === pid)?.name ?? "Spiller";
+      const others = roster
+        .filter((r) => r.pid !== myPid && roundPlacements[r.pid])
+        .map((r) => {
+          const sc = scorePlacement(current, theme, roundPlacements[r.pid]);
+          return {
+            name: r.name,
+            correctCount: (sc.xCorrect ? 1 : 0) + (sc.yCorrect ? 1 : 0),
+          };
+        });
+      revealData = {
+        myScore: myScoreObj,
+        winnerNames: winnerPids.map(nameOf),
+        iWon: winnerPids.includes(myPid),
+        others,
+      };
+    }
+  }
 
   // --- render ---------------------------------------------------------------
 
@@ -389,34 +503,52 @@ export default function Home() {
         />
       )}
 
-      {screen === "connect" && (mode === "host" || mode === "guest") && (
+      {screen === "connect" && mode === "host" && (
         <ConnectionPanel
-          intent={mode}
-          state={peer.state}
-          createOffer={peer.createOffer}
-          acceptOffer={peer.acceptOffer}
-          acceptAnswer={peer.acceptAnswer}
-          onBack={() => {
-            peer.reset();
-            setMode(null);
-            setScreen("setup");
-          }}
+          intent="host"
+          status={room.status}
+          roomCode={roomCode}
+          roster={room.roster}
+          hostRoom={room.hostRoom}
+          myName={myName || "Vert"}
+          onProceed={() => setScreen("lobby")}
+          onBack={backToSetup}
+        />
+      )}
+
+      {screen === "connect" && mode === "guest" && (
+        <ConnectionPanel
+          intent="guest"
+          status={room.status}
+          joinRoom={room.joinRoom}
+          myName={myName || "Spiller"}
+          onBack={backToSetup}
         />
       )}
 
       {screen === "lobby" && (
         <div className="w-full space-y-4">
           {mode === "guest" ? (
-            <p className="box-glow glow-cyan rounded-xl border border-neon-cyan/40 bg-stage-2/70 p-4 text-center text-gray-200 backdrop-blur">
-              Tilkoblet
-              {oppName ? ` til ${oppName}` : ""}. Venter på at verten velger
-              spill og starter …
-            </p>
+            <div className="box-glow glow-cyan space-y-3 rounded-xl border border-neon-cyan/40 bg-stage-2/70 p-4 text-center text-gray-200 backdrop-blur">
+              <p>Tilkoblet. Venter på at verten velger spill og starter …</p>
+              <PlayerChips roster={room.roster} myPid={myPid} />
+            </div>
           ) : (
             <>
               <h2 className="text-center font-display text-2xl uppercase tracking-wide text-neon-lime text-glow">
                 {mode === "single" ? "Velg et spill" : "Velg spill og start"}
               </h2>
+              {mode === "host" && (
+                <div className="rounded-xl border border-neon-purple/40 bg-stage-2/60 p-3 text-center backdrop-blur">
+                  <span className="text-xs uppercase tracking-wide text-gray-400">
+                    Romkode{" "}
+                    <span className="font-display text-lg text-neon-pink text-glow">
+                      {roomCode}
+                    </span>
+                  </span>
+                  <PlayerChips roster={room.roster} myPid={myPid} />
+                </div>
+              )}
               <GamePicker
                 selectedId={theme?.id}
                 onSelect={(t) =>
@@ -436,10 +568,8 @@ export default function Home() {
             gameName={theme.name}
             round={round}
             totalRounds={mystery.length}
-            myName={myName || "Du"}
-            myScore={myScore}
-            opponentName={mode === "single" ? null : oppName || "Motspiller"}
-            opponentScore={oppScore}
+            players={playersForBoard}
+            myPid={myPid}
           />
 
           {theme.description && (
@@ -452,62 +582,53 @@ export default function Home() {
             theme={theme}
             anchors={anchors}
             current={current}
-            placement={myPlacement}
+            placement={screen === "reveal" ? committedMine : myDraft}
             onPlace={onPlace}
-            locked={screen === "reveal"}
+            locked={screen === "reveal" || committed}
             revealed={screen === "reveal"}
-            opponentPlacement={mode === "single" ? null : oppPlacement}
+            others={gridOthers}
             myName={myName || "Du"}
-            opponentName={oppName || "Motspiller"}
           />
 
           {screen === "play" && (
             <div className="flex flex-col items-center gap-2">
-              {!myPlacement && (
+              {!myDraft && (
                 <p className="text-sm text-gray-400">
                   Dra kortet til riktig sted på rutenettet.
                 </p>
               )}
-              <button
-                type="button"
-                disabled={!myPlacement}
-                onClick={() => {
-                  playSound("lockIn");
-                  lockIn();
-                }}
-                className="box-glow glow-lime rounded-xl border-2 border-neon-lime bg-neon-lime/15 px-8 py-3 font-display text-xl uppercase tracking-wide text-neon-lime text-glow transition hover:bg-neon-lime/25 disabled:cursor-not-allowed disabled:border-gray-600 disabled:text-gray-500 disabled:opacity-50 disabled:shadow-none"
-              >
-                Lås inn
-              </button>
-              {mode !== "single" && myPlacement && !oppPlacement && (
+              {!committed && (
+                <button
+                  type="button"
+                  disabled={!myDraft}
+                  onClick={() => {
+                    playSound("lockIn");
+                    lockIn();
+                  }}
+                  className="box-glow glow-lime rounded-xl border-2 border-neon-lime bg-neon-lime/15 px-8 py-3 font-display text-xl uppercase tracking-wide text-neon-lime text-glow transition hover:bg-neon-lime/25 disabled:cursor-not-allowed disabled:border-gray-600 disabled:text-gray-500 disabled:opacity-50 disabled:shadow-none"
+                >
+                  Lås inn
+                </button>
+              )}
+              {committed && (
                 <p className="text-sm text-gray-400">
-                  Venter på at {oppName || "motspilleren"} plasserer …
+                  Venter på de andre spillerne …
                 </p>
               )}
             </div>
           )}
 
-          {screen === "reveal" && myRoundScore && myPlacement && (
+          {screen === "reveal" && revealData && committedMine && (
             <RoundResult
               theme={theme}
               card={current}
-              myScore={myRoundScore}
-              myPlacement={myPlacement}
-              roundPoints={
-                mode === "single" ? roundPoints(myRoundScore) : undefined
-              }
-              opponentScore={oppRoundScore}
-              opponentPlacement={mode === "single" ? null : oppPlacement}
-              outcome={
-                mode === "single" || !oppRoundScore
-                  ? null
-                  : (() => {
-                      const cmp = compareScores(myRoundScore, oppRoundScore);
-                      return cmp === "a" ? "win" : cmp === "b" ? "loss" : "tie";
-                    })()
-              }
+              myScore={revealData.myScore}
+              myPlacement={committedMine}
+              roundPoints={revealData.roundPoints}
+              winnerNames={revealData.winnerNames}
+              iWon={revealData.iWon}
+              others={revealData.others}
               myName={myName || "Du"}
-              opponentName={oppName || "Motspiller"}
               isLastRound={round + 1 >= mystery.length}
               onNext={advance}
               waiting={mode === "guest"}
@@ -521,13 +642,11 @@ export default function Home() {
         </div>
       )}
 
-      {screen === "gameover" && theme && (
+      {screen === "gameover" && (
         <GameOver
           mode={mode}
-          myName={myName || "Du"}
-          myScore={myScore}
-          oppName={oppName || "Motspiller"}
-          oppScore={oppScore}
+          players={playersForBoard}
+          myPid={myPid}
           onPlayAgain={playAgain}
         />
       )}
@@ -535,35 +654,69 @@ export default function Home() {
   );
 }
 
+// --- joined-players chips ----------------------------------------------------
+
+function PlayerChips({
+  roster,
+  myPid,
+}: {
+  roster: PlayerInfo[];
+  myPid: string;
+}) {
+  return (
+    <div className="mt-2 flex flex-wrap items-center justify-center gap-2">
+      <span className="text-xs uppercase tracking-wide text-gray-400">
+        Spillere ({roster.length}):
+      </span>
+      {roster.map((p) => (
+        <span
+          key={p.pid}
+          className={[
+            "rounded-full border px-2.5 py-0.5 text-xs font-semibold",
+            p.pid === myPid
+              ? "border-neon-cyan text-neon-cyan text-glow"
+              : "border-neon-gold/50 text-neon-gold",
+          ].join(" ")}
+        >
+          {p.name}
+          {p.pid === myPid ? " (deg)" : ""}
+        </span>
+      ))}
+    </div>
+  );
+}
+
 // --- game over (confetti + bouncy headline) ---------------------------------
 
 function GameOver({
   mode,
-  myName,
-  myScore,
-  oppName,
-  oppScore,
+  players,
+  myPid,
   onPlayAgain,
 }: {
   mode: Mode | null;
-  myName: string;
-  myScore: number;
-  oppName: string;
-  oppScore: number;
+  players: { pid: string; name: string; score: number }[];
+  myPid: string;
   onPlayAgain: () => void;
 }) {
   const root = useRef<HTMLDivElement>(null);
   const headingRef = useRef<HTMLHeadingElement>(null);
 
-  const won = mode === "single" || myScore >= oppScore;
-  const headline =
-    mode === "single"
-      ? "Ferdig!"
-      : myScore > oppScore
+  const single = mode === "single";
+  const sorted = [...players].sort((a, b) => b.score - a.score);
+  const topScore = sorted[0]?.score ?? 0;
+  const winners = sorted.filter((p) => p.score === topScore);
+  const iWon = winners.some((w) => w.pid === myPid);
+  const won = single || iWon;
+  const headline = single
+    ? "Ferdig!"
+    : winners.length > 1
+      ? iWon
+        ? "Delt seier!"
+        : "Uavgjort!"
+      : iWon
         ? "Du vant!"
-        : myScore < oppScore
-          ? `${oppName} vant`
-          : "Uavgjort!";
+        : `${winners[0]?.name ?? ""} vant`;
 
   useGSAP(
     () => {
@@ -648,22 +801,21 @@ function GameOver({
         {headline}
       </h2>
       <div className="space-y-1">
-        <p className="text-lg text-gray-200">
-          {myName}:{" "}
-          <span className="font-display text-2xl text-neon-cyan text-glow">
-            {myScore}
-          </span>{" "}
-          poeng
-        </p>
-        {mode !== "single" && (
-          <p className="text-lg text-gray-200">
-            {oppName}:{" "}
-            <span className="font-display text-2xl text-neon-gold text-glow">
-              {oppScore}
+        {sorted.map((p, i) => (
+          <p key={p.pid} className="text-lg text-gray-200">
+            {single ? "" : `${i + 1}. `}
+            {p.name}
+            {p.pid === myPid ? " (deg)" : ""}:{" "}
+            <span
+              className={`font-display text-2xl text-glow ${
+                p.pid === myPid ? "text-neon-cyan" : "text-neon-gold"
+              }`}
+            >
+              {p.score}
             </span>{" "}
             poeng
           </p>
-        )}
+        ))}
       </div>
       <button
         type="button"
@@ -760,7 +912,7 @@ function SetupScreen({
           onPointerLeave={unwiggle}
           className={`${btn} glow-lime border-neon-lime bg-neon-lime/10 text-neon-lime hover:bg-neon-lime/20`}
         >
-          Vert (inviter en venn)
+          Vert (lag rom)
         </button>
         <button
           type="button"

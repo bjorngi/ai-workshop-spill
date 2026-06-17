@@ -1,45 +1,49 @@
-// Copy-paste WebRTC signaling UI for the 4-step manual handshake.
+// Room-code based connection UI.
 //
-// Host:  1) generer tilbud -> kopier til gjest
-//        2) lim inn svaret fra gjest -> koblet
-// Guest: 1) lim inn tilbudet fra vert -> generer svar
-//        2) kopier svaret -> send til vert -> koblet
+// Host:  opens a room on mount, shows the shareable room code + the roster of
+//        players that have joined, then proceeds to game selection.
+// Guest: types the room code and joins.
 
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
-import type { ConnState } from "~/net/webrtc";
+import type { RoomStatus } from "~/net/useRoom";
 import { gsap, useGSAP, prefersReducedMotion } from "~/anim/gsap";
 import { playSound } from "~/audio/useSound";
 
 interface ConnectionPanelProps {
   intent: "host" | "guest";
-  state: ConnState;
-  createOffer: () => Promise<string>;
-  acceptOffer: (code: string) => Promise<string>;
-  acceptAnswer: (code: string) => Promise<void>;
+  status: RoomStatus;
+  /** Host only: the generated room code to share. */
+  roomCode?: string;
+  /** Host only: players that have joined so far (includes the host). */
+  roster?: { pid: string; name: string }[];
+  /** Host: open the room (call once on mount). */
+  hostRoom?: (code: string, name: string) => Promise<void>;
+  /** Guest: join a room by code. */
+  joinRoom?: (code: string, name: string) => Promise<void>;
+  myName: string;
+  /** Host: proceed to game selection (lobby). */
+  onProceed?: () => void;
   onBack: () => void;
 }
 
-const STATE_LABELS: Record<ConnState, string> = {
+const STATE_LABELS: Record<RoomStatus, string> = {
   idle: "Ikke tilkoblet",
-  offering: "Lager tilbud …",
-  "awaiting-answer": "Venter på svar fra gjest",
-  answering: "Lager svar …",
   connecting: "Kobler til …",
-  connected: "Tilkoblet!",
+  connected: "Klar!",
   failed: "Tilkobling feilet",
   closed: "Frakoblet",
 };
 
-// Neon accent per connection state for the status pill.
-function statusAccent(state: ConnState): {
+// Neon accent per connection status for the status pill.
+function statusAccent(status: RoomStatus): {
   text: string;
   border: string;
   glow: string;
 } {
-  if (state === "connected")
+  if (status === "connected")
     return { text: "text-neon-lime", border: "border-neon-lime", glow: "glow-lime" };
-  if (state === "failed" || state === "closed")
+  if (status === "failed" || status === "closed")
     return { text: "text-neon-pink", border: "border-neon-pink", glow: "glow-pink" };
   return { text: "text-neon-cyan", border: "border-neon-cyan", glow: "glow-cyan" };
 }
@@ -84,23 +88,22 @@ function CopyArea({ value, label }: { value: string; label: string }) {
 
 export function ConnectionPanel({
   intent,
-  state,
-  createOffer,
-  acceptOffer,
-  acceptAnswer,
+  status,
+  roomCode,
+  roster,
+  hostRoom,
+  joinRoom,
+  myName,
+  onProceed,
   onBack,
 }: ConnectionPanelProps) {
-  const [offerCode, setOfferCode] = useState(""); // host's generated offer
-  const [answerCode, setAnswerCode] = useState(""); // guest's generated answer
-  const [pasteOffer, setPasteOffer] = useState(""); // guest pastes host offer
-  const [pasteAnswer, setPasteAnswer] = useState(""); // host pastes guest answer
+  const [code, setCode] = useState(""); // guest: typed room code
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const connected = state === "connected";
-
   const scope = useRef<HTMLDivElement>(null);
   const pillRef = useRef<HTMLSpanElement>(null);
+  const hostedRef = useRef(false);
 
   async function run(fn: () => Promise<void>) {
     setBusy(true);
@@ -108,11 +111,24 @@ export function ConnectionPanel({
     try {
       await fn();
     } catch (e) {
-      setError(e instanceof Error ? e.message : "Noe gikk galt");
+      const msg = e instanceof Error ? e.message : "Noe gikk galt";
+      setError(
+        msg.includes("no-room") ? "Fant ikke rommet – sjekk koden." : msg,
+      );
     } finally {
       setBusy(false);
     }
   }
+
+  // Host: open the room once on mount.
+  useEffect(() => {
+    if (intent !== "host") return;
+    if (hostedRef.current) return;
+    if (!roomCode || !hostRoom) return;
+    hostedRef.current = true;
+    run(() => hostRoom(roomCode, myName));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [intent, roomCode, hostRoom, myName]);
 
   // Panel entrance: slide + scale the whole card in.
   useGSAP(
@@ -132,7 +148,7 @@ export function ConnectionPanel({
     { scope },
   );
 
-  // Step transitions + status flourishes driven off `state`.
+  // Step transitions + status flourishes driven off `status`.
   useGSAP(
     () => {
       const reduce = prefersReducedMotion();
@@ -158,7 +174,7 @@ export function ConnectionPanel({
         }
       }
 
-      // Status pill: pulse on every state change.
+      // Status pill: pulse on every status change.
       if (pillRef.current && !reduce) {
         gsap.fromTo(
           pillRef.current,
@@ -168,7 +184,7 @@ export function ConnectionPanel({
       }
 
       // Connected: success flourish + sound.
-      if (state === "connected") {
+      if (status === "connected") {
         playSound("reveal");
         if (!reduce && pillRef.current) {
           const tl = gsap.timeline();
@@ -191,10 +207,11 @@ export function ConnectionPanel({
         }
       }
     },
-    { scope, dependencies: [state] },
+    { scope, dependencies: [status] },
   );
 
-  const accent = statusAccent(state);
+  const accent = statusAccent(status);
+  const players = roster ?? [];
 
   return (
     <div
@@ -203,7 +220,7 @@ export function ConnectionPanel({
     >
       <div className="flex items-center justify-between gap-3">
         <h2 className="font-display text-2xl uppercase tracking-wide text-white text-glow">
-          {intent === "host" ? "Vert – koble til gjest" : "Gjest – koble til vert"}
+          {intent === "host" ? "Vert – del koden" : "Gjest – bli med"}
         </h2>
         <span
           ref={pillRef}
@@ -214,101 +231,87 @@ export function ConnectionPanel({
             accent.glow,
           ].join(" ")}
         >
-          {STATE_LABELS[state]}
+          {STATE_LABELS[status]}
         </span>
       </div>
 
       {intent === "host" ? (
         <div className="space-y-4">
-          <div className="conn-step">
+          <div className="conn-step text-center">
             <p className="text-sm text-gray-300">
-              1. Lag et tilbud og send koden til gjesten (f.eks. på chat).
+              Del denne koden. Spillere skriver den inn for å bli med.
             </p>
-            <button
-              type="button"
-              disabled={busy || !!offerCode}
-              onClick={() => {
-                playSound("click");
-                run(async () => {
-                  const code = await createOffer();
-                  setOfferCode(code);
-                });
-              }}
-              className="mt-2 rounded-xl border-2 border-neon-pink px-4 py-2 font-display uppercase tracking-wide text-neon-pink text-glow transition-all hover:box-glow hover:glow-pink disabled:opacity-40 disabled:hover:shadow-none"
-            >
-              Generer tilbudskode
-            </button>
+            <div className="mt-3 font-display text-5xl uppercase tracking-[0.3em] text-neon-pink text-glow">
+              {roomCode ?? "…"}
+            </div>
           </div>
 
-          {offerCode && (
+          {roomCode && (
             <div className="conn-step">
-              <CopyArea value={offerCode} label="Tilbudskode (send til gjest)" />
+              <CopyArea value={roomCode} label="Romkode (del med spillerne)" />
             </div>
           )}
 
-          {offerCode && !connected && (
-            <div className="conn-step">
-              <p className="text-sm text-gray-300">
-                2. Lim inn svarkoden du får tilbake fra gjesten.
+          <div className="conn-step">
+            <p className="text-xs font-semibold uppercase tracking-wide text-neon-cyan text-glow">
+              Spillere ({players.length})
+            </p>
+            <ul className="mt-2 flex flex-wrap gap-2">
+              {players.map((p) => (
+                <li
+                  key={p.pid}
+                  className="rounded-full border-2 border-neon-cyan/40 bg-stage/60 px-3 py-1 text-sm text-gray-100"
+                >
+                  {p.name}
+                </li>
+              ))}
+            </ul>
+          </div>
+
+          <div className="conn-step">
+            <button
+              type="button"
+              onClick={() => {
+                playSound("click");
+                onProceed?.();
+              }}
+              className="rounded-xl border-2 border-neon-lime px-4 py-2 font-display uppercase tracking-wide text-neon-lime text-glow transition-all hover:box-glow hover:glow-lime"
+            >
+              Velg spill →
+            </button>
+            {players.length < 2 && (
+              <p className="mt-2 text-xs text-gray-400">
+                Du kan starte når du vil – flere kan bli med underveis.
               </p>
-              <textarea
-                value={pasteAnswer}
-                onChange={(e) => setPasteAnswer(e.target.value)}
-                placeholder="Lim inn svarkode …"
-                className="mt-1.5 h-24 w-full rounded-xl border-2 border-neon-lime/40 bg-stage/80 p-2.5 font-mono text-xs text-gray-100 backdrop-blur transition-colors placeholder:text-gray-500 focus:border-neon-lime focus:outline-none"
-              />
-              <button
-                type="button"
-                disabled={busy || !pasteAnswer.trim()}
-                onClick={() => {
-                  playSound("click");
-                  run(() => acceptAnswer(pasteAnswer.trim()));
-                }}
-                className="mt-2 rounded-xl border-2 border-neon-lime px-4 py-2 font-display uppercase tracking-wide text-neon-lime text-glow transition-all hover:box-glow hover:glow-lime disabled:opacity-40 disabled:hover:shadow-none"
-              >
-                Koble til
-              </button>
-            </div>
-          )}
+            )}
+          </div>
         </div>
       ) : (
         <div className="space-y-4">
           <div className="conn-step">
             <p className="text-sm text-gray-300">
-              1. Lim inn tilbudskoden du fikk fra verten, og lag et svar.
+              Skriv inn romkoden du fikk fra verten.
             </p>
-            <textarea
-              value={pasteOffer}
-              onChange={(e) => setPasteOffer(e.target.value)}
-              placeholder="Lim inn tilbudskode …"
-              disabled={!!answerCode}
-              className="mt-1.5 h-24 w-full rounded-xl border-2 border-neon-pink/40 bg-stage/80 p-2.5 font-mono text-xs text-gray-100 backdrop-blur transition-colors placeholder:text-gray-500 focus:border-neon-pink focus:outline-none disabled:opacity-60"
+            <input
+              type="text"
+              value={code}
+              maxLength={6}
+              onChange={(e) => setCode(e.target.value.toUpperCase())}
+              placeholder="ROMKODE"
+              className="mt-2 w-full rounded-xl border-2 border-neon-pink/40 bg-stage/80 p-3 text-center font-display text-2xl uppercase tracking-[0.3em] text-gray-100 backdrop-blur transition-colors placeholder:text-gray-500 focus:border-neon-pink focus:outline-none"
             />
             <button
               type="button"
-              disabled={busy || !pasteOffer.trim() || !!answerCode}
+              disabled={busy || !code.trim()}
               onClick={() => {
                 playSound("click");
-                run(async () => {
-                  const code = await acceptOffer(pasteOffer.trim());
-                  setAnswerCode(code);
-                });
+                run(() => joinRoom!(code.trim(), myName));
               }}
               className="mt-2 rounded-xl border-2 border-neon-pink px-4 py-2 font-display uppercase tracking-wide text-neon-pink text-glow transition-all hover:box-glow hover:glow-pink disabled:opacity-40 disabled:hover:shadow-none"
             >
-              Generer svarkode
+              Bli med
             </button>
           </div>
-
-          {answerCode && (
-            <div className="conn-step">
-              <p className="text-sm text-gray-300">
-                2. Send denne svarkoden tilbake til verten. Dere er koblet når
-                verten limer den inn.
-              </p>
-              <CopyArea value={answerCode} label="Svarkode (send til vert)" />
-            </div>
-          )}
         </div>
       )}
 

@@ -244,3 +244,34 @@ deploy key secret `plasseringsspillet-flux-auth` that must be created once with 
 
 The GHCR package must be public, or the Deployment needs `imagePullSecrets` and the
 ImageRepository needs a matching `secretRef` so Flux can scan private tags.
+
+## 2026-06-17 — Switch from SPA mode to React Router framework mode (ssr:true)
+
+Flipped `ssr:false` → `ssr:true` so we can host a tiny in-memory WebRTC signaling server as a
+resource route (`app/routes/api.room.$code.ts`) inside the same app — no separate backend. The
+build now emits both `build/server` (the SSR entry) and `build/client` (browser assets). All
+browser-only APIs (`RTCPeerConnection`, pointer events, Web Audio) stay inside effects/handlers,
+never at module top-level, so server-rendering the shell remains safe. _Why:_ a resource route is
+the smallest way to get a server endpoint without leaving the React Router stack.
+
+## 2026-06-17 — N-player multiplayer via room codes (star / host-relay topology)
+
+Replaced manual copy-paste SDP signaling with room codes. Topology is a star: each guest holds a
+single `RTCDataChannel` to the host, and the host is the authoritative hub — it relays placements
+between guests and drives the round flow. Round winners are computed locally and deterministically
+on every client (closest total slot-error wins +1, ties share the point) so no result needs to be
+trusted from the wire. _Why:_ scales past 2 players while keeping a single source of truth.
+
+## 2026-06-17 — In-memory signaling mailbox (single replica)
+
+The signaling resource route is a per-room mailbox held in a process-local `Map` with a ~10 min
+TTL, exposing per-guest offer/answer slots that peers poll to exchange SDP. It is intentionally
+stateful and ephemeral, which is fine for a single replica but is the reason we cannot scale out.
+
+## 2026-06-17 — Dockerfile runs a Node SSR server; nginx removed
+
+The Dockerfile is now a two-stage Node build that runs `react-router-serve` on `PORT=8080`
+(matching the Service/HTTPRoute) instead of serving a static bundle via nginx; `nginx.conf` was
+deleted since the Node server handles SPA fallback + asset serving. The k8s Deployment keeps
+`replicas: 1` because the in-memory signaling mailbox and host-relay hub are not horizontally
+scalable without sticky sessions or a shared store; memory limit bumped 256Mi → 384Mi for Node.

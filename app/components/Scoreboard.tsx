@@ -1,4 +1,4 @@
-// Round number, current game name, and score(s).
+// Round number, current game name, and score(s) for N players.
 
 import { useRef } from "react";
 import { gsap, useGSAP, prefersReducedMotion } from "~/anim/gsap";
@@ -7,49 +7,21 @@ interface ScoreboardProps {
   gameName: string;
   round: number;
   totalRounds: number;
-  myName: string;
-  myScore: number;
-  /** When set, multiplayer: shows both players. */
-  opponentName?: string | null;
-  opponentScore?: number;
+  players: { pid: string; name: string; score: number }[];
+  myPid: string;
 }
 
 export function Scoreboard({
   gameName,
   round,
   totalRounds,
-  myName,
-  myScore,
-  opponentName,
-  opponentScore,
+  players,
+  myPid,
 }: ScoreboardProps) {
-  const multiplayer = opponentName != null;
-
   const scope = useRef<HTMLDivElement>(null);
-  const myScoreRef = useRef<HTMLDivElement>(null);
-  const oppScoreRef = useRef<HTMLDivElement>(null);
-  const prevMy = useRef(myScore);
-  const prevOpp = useRef(opponentScore ?? 0);
 
-  // Pop the score number whenever its value changes.
-  useGSAP(
-    () => {
-      if (prefersReducedMotion()) {
-        prevMy.current = myScore;
-        prevOpp.current = opponentScore ?? 0;
-        return;
-      }
-      if (myScore !== prevMy.current && myScoreRef.current) {
-        popScore(myScoreRef.current);
-      }
-      if ((opponentScore ?? 0) !== prevOpp.current && oppScoreRef.current) {
-        popScore(oppScoreRef.current);
-      }
-      prevMy.current = myScore;
-      prevOpp.current = opponentScore ?? 0;
-    },
-    { scope, dependencies: [myScore, opponentScore] },
-  );
+  // Sort by score descending without mutating the prop array (stable).
+  const sorted = [...players].sort((a, b) => b.score - a.score);
 
   return (
     <div
@@ -65,31 +37,60 @@ export function Scoreboard({
         </div>
       </div>
 
-      <div className="flex items-center gap-6">
-        <div className="text-center">
-          <div className="text-[0.7rem] font-bold uppercase tracking-wide text-neon-cyan text-glow">
-            {myName}
-          </div>
-          <div
-            ref={myScoreRef}
-            className="font-display text-4xl leading-none text-neon-cyan text-glow-strong"
-          >
-            {myScore}
-          </div>
-        </div>
-        {multiplayer && (
-          <div className="text-center">
-            <div className="text-[0.7rem] font-bold uppercase tracking-wide text-neon-gold text-glow">
-              {opponentName}
-            </div>
-            <div
-              ref={oppScoreRef}
-              className="font-display text-4xl leading-none text-neon-gold text-glow-strong"
-            >
-              {opponentScore ?? 0}
-            </div>
-          </div>
-        )}
+      <div className="flex flex-wrap items-center gap-6">
+        {sorted.map((p) => (
+          <PlayerScore
+            key={p.pid}
+            name={p.name}
+            score={p.score}
+            isMe={p.pid === myPid}
+          />
+        ))}
+      </div>
+    </div>
+  );
+}
+
+interface PlayerScoreProps {
+  name: string;
+  score: number;
+  isMe: boolean;
+}
+
+/** A single player's name + big score, with a pop animation when the score changes. */
+function PlayerScore({ name, score, isMe }: PlayerScoreProps) {
+  const scoreRef = useRef<HTMLDivElement>(null);
+  const prevScore = useRef(score);
+
+  // Pop the score number whenever its value changes.
+  useGSAP(
+    () => {
+      if (prefersReducedMotion()) {
+        prevScore.current = score;
+        return;
+      }
+      if (score !== prevScore.current && scoreRef.current) {
+        popScore(scoreRef.current);
+      }
+      prevScore.current = score;
+    },
+    { dependencies: [score] },
+  );
+
+  const accent = isMe ? "text-neon-cyan" : "text-neon-gold";
+
+  return (
+    <div className="text-center">
+      <div
+        className={`text-[0.7rem] font-bold uppercase tracking-wide ${accent} text-glow`}
+      >
+        {name}
+      </div>
+      <div
+        ref={scoreRef}
+        className={`font-display text-4xl leading-none ${accent} text-glow-strong`}
+      >
+        {score}
       </div>
     </div>
   );

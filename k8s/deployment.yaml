@@ -18,9 +18,15 @@ spec:
       imagePullSecrets:
       - name: ghcr-pull
       containers:
+      # SSR Node server (react-router-serve). In-memory WebRTC signaling + the
+      # host-relay topology mean state lives in this single process, so we keep
+      # replicas: 1 — no horizontal scaling without sticky sessions / shared store.
       - name: plasseringsspillet
         image: ghcr.io/bjorngi/ai-workshop-spill:20260617125334-96d9d92 # {"$imagepolicy": "flux-system:plasseringsspillet"}
         imagePullPolicy: IfNotPresent
+        env:
+        - name: PORT
+          value: "8080"
         ports:
         - name: http
           containerPort: 8080
@@ -44,6 +50,6 @@ spec:
         resources:
           requests:
             cpu: 50m
-            memory: 64Mi
+            memory: 128Mi
           limits:
-            memory: 256Mi
+            memory: 384Mi

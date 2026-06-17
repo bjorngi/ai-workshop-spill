@@ -22,15 +22,15 @@ interface RoundResultProps {
   myScore: PlacementScore;
   /** The player's committed drop this round. */
   myPlacement: Placement;
-  /** Points awarded this round (solo or "+1"/"0" for the round winner). */
+  /** Points awarded this round (solo). */
   roundPoints?: number;
-  /** Multiplayer: opponent's error + comparison outcome. */
-  opponentScore?: PlacementScore | null;
-  /** Multiplayer: the opponent's committed drop this round. */
-  opponentPlacement?: Placement | null;
-  outcome?: "win" | "loss" | "tie" | null;
+  /** Multiplayer: names of the round winner(s) (lowest total error). */
+  winnerNames?: string[];
+  /** Multiplayer: am I among the winners. */
+  iWon?: boolean;
+  /** Multiplayer: short per-player error summary (others, excluding me). */
+  others?: { name: string; correctCount: number }[]; // correctCount in 0..2
   myName?: string;
-  opponentName?: string;
   isLastRound: boolean;
   onNext: () => void;
   /** Disable the advance button (e.g. waiting for the other player). */
@@ -57,11 +57,10 @@ export function RoundResult({
   myScore,
   myPlacement,
   roundPoints,
-  opponentScore,
-  opponentPlacement,
-  outcome,
+  winnerNames,
+  iWon,
+  others,
   myName,
-  opponentName,
   isLastRound,
   onNext,
   waiting,
@@ -69,21 +68,19 @@ export function RoundResult({
   const root = useRef<HTMLDivElement>(null);
   const pointsRef = useRef<HTMLSpanElement>(null);
 
+  const multiplayer = winnerNames != null;
+
   const xDomain = axisDomain(theme, "x");
   const yDomain = axisDomain(theme, "y");
   const myReadX = fractionToValue(myPlacement.fx, xDomain.min, xDomain.max, theme.xAxis.scale);
   const myReadY = fractionToValue(myPlacement.fy, yDomain.min, yDomain.max, theme.yAxis.scale);
 
-  const opponentCorrect = opponentScore
-    ? (opponentScore.xCorrect ? 1 : 0) + (opponentScore.yCorrect ? 1 : 0)
-    : 0;
-
-  const pointsValue =
-    outcome != null ? (outcome === "win" ? 1 : 0) : (roundPoints ?? null);
+  // Animated counter target: solo points, or "+1" when I won the round.
+  const pointsValue = multiplayer ? (iWon ? 1 : null) : (roundPoints ?? null);
 
   useGSAP(
     () => {
-      playSound(outcome === "win" ? "win" : outcome === "loss" ? "lose" : "reveal");
+      playSound(iWon ? "win" : multiplayer ? "lose" : "reveal");
 
       // Emoji confetti scaled by how close the placement was (avg axis accuracy,
       // 0 = total miss → sad face, 1 = bang on → eggplant).
@@ -153,12 +150,12 @@ export function RoundResult({
     onNext();
   };
 
+  // Green when I scored (solo points > 0, or I won the round); gold otherwise
+  // for multiplayer (someone else won / no winner).
   const outcomeClass =
-    outcome === "win" || (outcome == null && (roundPoints ?? 0) > 0)
+    iWon || (!multiplayer && (roundPoints ?? 0) > 0)
       ? "border-neon-lime/60 bg-neon-lime/10 text-neon-lime glow-lime"
-      : outcome === "loss"
-        ? "border-neon-pink/60 bg-neon-pink/10 text-neon-pink glow-pink"
-        : "border-neon-gold/60 bg-neon-gold/10 text-neon-gold glow-gold";
+      : "border-neon-gold/60 bg-neon-gold/10 text-neon-gold glow-gold";
 
   return (
     <div
@@ -195,28 +192,39 @@ export function RoundResult({
         </span>
       </div>
 
-      {opponentScore && (
-        <div className="anim-row anim-init mt-2 text-xs text-gray-400">
-          {opponentName ?? "Motspiller"}: {opponentCorrect}/2 innenfor slingringsmonn
+      {others != null && others.length > 0 && (
+        <div className="mt-2">
+          {others.map((o) => (
+            <div key={o.name} className="anim-row anim-init text-xs text-gray-400">
+              {o.name}: {o.correctCount}/2 innenfor slingringsmonn
+            </div>
+          ))}
         </div>
       )}
 
       {/* Outcome / points — one compact line. */}
-      {(outcome != null || roundPoints != null) && (
+      {multiplayer ? (
         <div
           className={`anim-row anim-init mt-3 rounded-xl border px-3 py-2 text-center font-display text-lg uppercase tracking-wide box-glow ${outcomeClass}`}
         >
-          {outcome === "loss" ? (
-            "Du tapte runden"
-          ) : outcome === "tie" ? (
-            "Uavgjort"
-          ) : (
+          {iWon ? (
             <>
-              {outcome === "win" ? "Du vant! " : ""}+
-              <span ref={pointsRef}>0</span> poeng
+              Du vant runden! +<span ref={pointsRef}>0</span> poeng
             </>
+          ) : winnerNames.length > 0 ? (
+            `Rundevinner: ${winnerNames.join(", ")}`
+          ) : (
+            "Ingen vinner"
           )}
         </div>
+      ) : (
+        roundPoints != null && (
+          <div
+            className={`anim-row anim-init mt-3 rounded-xl border px-3 py-2 text-center font-display text-lg uppercase tracking-wide box-glow ${outcomeClass}`}
+          >
+            +<span ref={pointsRef}>0</span> poeng
+          </div>
+        )
       )}
 
       <button

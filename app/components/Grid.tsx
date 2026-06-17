@@ -26,11 +26,32 @@ interface GridProps {
   locked?: boolean;
   /** Reveal mode: show the current card's true position. */
   revealed?: boolean;
-  /** Opponent placement to show at reveal (multiplayer). */
-  opponentPlacement?: Placement | null;
+  /** Other players' placements to show at reveal (multiplayer, N players). */
+  others?: { pid: string; name: string; placement: Placement }[];
   myName?: string;
-  opponentName?: string;
 }
+
+/** Marker palette for other players (self = blue, fasit = pink, anchors = lime). */
+const OTHER_COLORS = [
+  {
+    dot: "bg-neon-gold",
+    label: "bg-neon-gold text-stage",
+    glow: "glow-gold",
+    shadow: "shadow-[0_0_16px_var(--color-neon-gold)]",
+  },
+  {
+    dot: "bg-neon-purple",
+    label: "bg-neon-purple text-white",
+    glow: "glow-purple",
+    shadow: "shadow-[0_0_16px_var(--color-neon-purple)]",
+  },
+  {
+    dot: "bg-neon-cyan",
+    label: "bg-neon-cyan text-stage",
+    glow: "glow-cyan",
+    shadow: "shadow-[0_0_16px_var(--color-neon-cyan)]",
+  },
+];
 
 /** Position helper: convert bottom-left fractions to CSS left/bottom %. */
 function pct(f: number): string {
@@ -45,9 +66,8 @@ export function Grid({
   onPlace,
   locked,
   revealed,
-  opponentPlacement,
+  others,
   myName,
-  opponentName,
 }: GridProps) {
   const plotRef = useRef<HTMLDivElement | null>(null);
   const rootRef = useRef<HTMLDivElement | null>(null);
@@ -206,12 +226,13 @@ export function Grid({
       const dot = rootRef.current?.querySelector(".truth-dot");
       const wave = rootRef.current?.querySelector(".truth-wave");
       const me = rootRef.current?.querySelector(".me-marker");
-      const opp = rootRef.current?.querySelector(".opp-marker");
+      const opps = rootRef.current?.querySelectorAll(".opp-marker");
+      const oppList = opps ? Array.from(opps) : [];
 
       playSound("reveal");
 
       if (reduce) {
-        gsap.set([truth, me, opp].filter(Boolean), { autoAlpha: 1 });
+        gsap.set([truth, me, ...oppList].filter(Boolean), { autoAlpha: 1 });
         if (wave) gsap.set(wave, { autoAlpha: 0 });
         return;
       }
@@ -234,11 +255,11 @@ export function Grid({
           0,
         );
       }
-      // Opponent + me markers pop in.
-      if (opp) {
+      // Other players' + my markers pop in.
+      if (oppList.length) {
         tl.from(
-          opp,
-          { autoAlpha: 0, scale: 0, duration: 0.5, ease: "pop" },
+          oppList,
+          { autoAlpha: 0, scale: 0, duration: 0.5, ease: "pop", stagger: 0.06 },
           "-=0.4",
         );
       }
@@ -385,21 +406,30 @@ export function Grid({
               );
             })}
 
-            {/* Opponent marker (reveal, multiplayer) */}
-            {revealed && opponentPlacement && (
-              <div
-                className="opp-marker absolute flex -translate-x-1/2 translate-y-1/2 flex-col items-center"
-                style={{
-                  left: pct(opponentPlacement.fx),
-                  bottom: pct(opponentPlacement.fy),
-                }}
-              >
-                <div className="h-5 w-5 rounded-full border-2 border-white bg-neon-gold box-glow glow-gold shadow-[0_0_16px_var(--color-neon-gold)]" />
-                <span className="mt-0.5 rounded bg-neon-gold px-1 text-[10px] font-bold text-stage">
-                  {opponentName ?? "Motspiller"}
-                </span>
-              </div>
-            )}
+            {/* Other players' markers (reveal, multiplayer, N players) */}
+            {revealed &&
+              others?.map((o, i) => {
+                const c = OTHER_COLORS[i % OTHER_COLORS.length];
+                return (
+                  <div
+                    key={o.pid}
+                    className="opp-marker absolute flex -translate-x-1/2 translate-y-1/2 flex-col items-center"
+                    style={{
+                      left: pct(o.placement.fx),
+                      bottom: pct(o.placement.fy),
+                    }}
+                  >
+                    <div
+                      className={`h-5 w-5 rounded-full border-2 border-white box-glow ${c.dot} ${c.glow} ${c.shadow}`}
+                    />
+                    <span
+                      className={`mt-0.5 rounded px-1 text-[10px] font-bold ${c.label}`}
+                    >
+                      {o.name}
+                    </span>
+                  </div>
+                );
+              })}
 
             {/* True position (reveal) */}
             {revealed && current && (

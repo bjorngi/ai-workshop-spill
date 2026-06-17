@@ -3,6 +3,11 @@ name: Build and publish Docker image
 on:
   push:
     branches: [main]
+    paths-ignore:
+      - 'k8s/**'
+      - 'flux/**'
+      - 'DECISIONS.md'
+      - 'README.md'
   workflow_dispatch:
 
 env:

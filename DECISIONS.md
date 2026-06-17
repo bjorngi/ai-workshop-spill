@@ -201,3 +201,32 @@ Bug fix: clicking "Lås inn" crashed with `RangeError: Maximum call stack size e
 immediately. _Rule:_ when using `gsap.matchMedia()` inside `useGSAP`, revert it from the **outer**
 useGSAP cleanup (`return () => mm.revert()` at the end of the hook callback), never as the value
 returned by an `mm.add()` callback. (StageBackground and the logo already followed this.)
+
+## 2026-06-17 — Kubernetes deployment on plasseringsspillet.stackunderflow.no
+
+Added a minimal `k8s/` Kustomize overlay (namespace, deployment, service, HTTPRoute) for the
+cluster managed in the `stackunderflow.no` repo. The container is the existing static nginx build
+(`ghcr.io/bjorngi/ai-workshop-spill`), served on port 8080. The HTTPRoute attaches only to the
+new `plasseringsspillet-https` listener in the shared Gateway, leaving the global port-80
+HTTP→HTTPS redirect intact. No OIDC/PocketID protection: the game is a public static SPA.
+The Gateway listener and TLS secret were added to the infrastructure repo separately because the
+Gateway is shared cluster infrastructure, not per-app config.
+
+## 2026-06-17 — Flux-driven image updates with timestamped semver tags
+
+To make the cluster roll forward automatically when a new image is published, the CI workflow now
+also tags every build with a semver-sortable tag: `0.0.0-<YYYYMMDDHHMMSS>.<shortsha>`.
+`k8s/image-repository.yaml`, `k8s/image-policy.yaml`, and `k8s/image-update-automation.yaml`
+watch the registry and rewrite the image tag in `k8s/deployment.yaml` (via the
+`{"$imagepolicy": "flux-system:plasseringsspillet"}` marker). Flux then commits and pushes the
+change back to the app repo's `main` branch.
+
+To prevent the manifest commit from re-triggering CI and causing an infinite build loop, the
+workflow now ignores pushes that only touch `k8s/**`, `flux/**`, `DECISIONS.md`, or `README.md`.
+
+The cluster config in `stackunderflow.no` gets `plasseringsspillet.yaml` (a GitRepository +
+Kustomization) which applies `./k8s` from `bjorngi/ai-workshop-spill`. The GitRepository uses a
+deploy key secret `plasseringsspillet-flux-auth` that must be created once with write access.
+
+The GHCR package must be public, or the Deployment needs `imagePullSecrets` and the
+ImageRepository needs a matching `secretRef` so Flux can scan private tags.

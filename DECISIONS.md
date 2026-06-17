@@ -103,3 +103,101 @@ anchor dots in `Grid.tsx`, but **blue** (`bg-blue-500`). _Why:_ the big card bod
 cursor/finger and obscured the exact grid spot you were aiming for; the small dot makes placement
 precise. Idle (not dragging) it stays the normal big card. Safe because `useDrag` calls
 `setPointerCapture`, so the same element keeps receiving move/up events after it shrinks.
+
+## 2026-06-17 — ConnectionPanel neon/karaoke redesign
+
+`ConnectionPanel.tsx` restyled into the glassy neon-nightclub look: `bg-stage-2/70` glass card
+with a purple neon border + `box-glow`, `font-display` headings/buttons, neon-bordered dark
+textareas, and glowing neon outline buttons (pink/lime/cyan). Animation is GSAP via `useGSAP`:
+the panel slides+scales in on mount (`anim-init` + `autoAlpha`), and a `state`-keyed effect
+fades/slides each `.conn-step` in and pulses the status pill on every connection-state change.
+Reaching `connected` fires a success flourish (card+pill scale burst + brightness pop) and
+`playSound("reveal")`. All button handlers also `playSound("click")`. _Why:_ match the global
+neon theme. Logic, props, and the createOffer/acceptOffer/acceptAnswer/clipboard/onBack wiring
+are 100% unchanged — presentation + animation only. Reduced motion ends with everything visible.
+
+## 2026-06-17 — Grid + CurrentCard neon/karaoke redesign (GSAP)
+
+`Grid.tsx` and `CurrentCard.tsx` restyled into the glassy neon-nightclub look. The plot frame is
+a `bg-stage-2/60 backdrop-blur` glass panel with a neon-purple border + `box-glow`. Entrance is a
+single `useGSAP` timeline: frame pops in, dashed gridlines "draw" (horizontals scaleX from
+`left`, verticals scaleY from `bottom`, staggered), ticks/axis labels fade in, then anchors pop
+with stagger (ease "pop"). Anchor dots switched emerald→`neon-lime` with a soft halo. A second
+`useGSAP` keyed on `anchors.length` pops ONLY the newest dot when the array grows (tracked via a
+`seenAnchors` ref so the entrance and append hooks don't double-pop on mount). Reveal (keyed on
+`revealed`/`current.id`): the `neon-pink` "fasit" marker bursts in (ease "pop") with an expanding
+shockwave ring (absolute sibling scaling ~3.2x while fading), the old CSS `animate-pulse` is
+replaced by an infinite GSAP scale+brightness yoyo, and player (`neon-blue`) + opponent
+(`neon-gold`) markers pop in; fires `playSound("reveal")`. All axis math, tick logic, props, and
+`useDrag` wiring are untouched.
+
+`CurrentCard.tsx`: idle = glassy `neon-purple` card (`box-glow`, `font-display` title) with an
+infinite "breathing" timeline (y bob + brightness pulse) wrapped in `matchMedia`; entrance is a
+spotlight drop-in from above with `back.out` bounce. The morph to/from the small `neon-cyan`
+glowing dot is done by cross-fading/scaling two stacked INNER layers (big card + dot) on the
+SAME persistent handler element — never remounting it — so `useDrag`'s `setPointerCapture` and
+all pointer/placement math stay intact (chose this over Flip to guarantee pointer capture
+survives). Plays `playSound("drop")` on pointer-up. Reduced motion: all entrances/loops are
+guarded and elements end up visible and usable.
+
+## 2026-06-17 — Adopt GSAP + @gsap/react for all animation
+
+Added `gsap` and `@gsap/react`. Plugin registration, project defaults, and named custom eases
+live in one module `app/anim/gsap.ts` (registers `useGSAP, Flip, SplitText, Draggable,
+InertiaPlugin, CustomEase, Physics2DPlugin`; defines eases `"pop"` overshoot and `"glide"`
+smooth-out; `gsap.defaults({ ease: "power3.out", duration: 0.6 })`). Registration/ease creation
+are guarded behind `typeof window !== "undefined"` because the SPA root shell is still prerendered
+in Node at build time. Imported once for side effects from `app/root.tsx`. Components use the
+`useGSAP(() => …, { scope: ref })` hook (auto-cleanup) and a shared `prefersReducedMotion()`
+helper / `gsap.matchMedia()` so every animation has a reduced-motion branch. _Why:_ the redesign
+is animation-heavy and GSAP gives timelines, SplitText, Flip and physics in one toolkit.
+
+## 2026-06-17 — Neon "karaoke stage" visual direction
+
+Replaced the light utility UI with a dark neon-nightclub look. Design tokens live in `app.css`
+as Tailwind v4 `@theme` vars: a near-black stage (`--color-stage`, `--color-stage-2`) plus a
+softened neon palette (`neon-pink/cyan/lime/gold/purple/blue`) and an **Anton** display font
+(`--font-display`) for big uppercase headings, alongside Inter for body. Reusable glow helpers:
+`.text-glow`/`.text-glow-strong` (currentColor) and `.box-glow` + `.glow-*` (halo via a `--glow`
+var). The app is now always dark (`dark:` variants dropped). A global `StageBackground.tsx`
+(mounted in `root.tsx`) renders an animated hue-drifting gradient, two sweeping spotlight cones,
+and floating bokeh — all GSAP loops wrapped in `matchMedia` with a static reduced-motion fallback.
+_Note:_ initial neon was too aggressive, so glow radii/opacity, palette saturation, spotlight
+opacity, and the logo shimmer were all toned down centrally via the shared utilities.
+
+## 2026-06-17 — Synthesized Web Audio SFX + gag "volume" button
+
+`app/audio/sound.ts` is a tiny Web Audio engine (lazy `AudioContext` on first gesture) that
+synthesizes all one-shots (`click, drop, lockIn, reveal, win, lose, roundStart, louder`) from
+oscillator+gain envelopes — no asset files. Everything routes through one master gain whose value
+is a `localStorage`-persisted **volume**, capped at a safe ceiling. There is intentionally **no
+mute**: the big on-screen speaker button (`VolumeButton.tsx`, in the header) is a gag that only
+ever turns the volume UP a notch per press (with a rising "louder!" sound and a bounce), and the
+speaker icon grows extra waves as it gets louder. _Why:_ user asked for the mute button to make
+sound louder instead of muting, and to be bigger.
+
+## 2026-06-17 — Home screen choreography (logo, setup, game over)
+
+`home.tsx`: the logo is `SplitText`-split and bounces in on load; its marquee shimmer now fires
+**only on hover** (per user request) rather than looping. Setup screen entrance staggers in with
+neon mode buttons that wiggle on hover and `playSound("click")`. Game over is its own `GameOver`
+component: a bouncy `SplitText` headline, scores, and — on a win — a `Physics2D` confetti burst
+from a temporary DOM layer. Sound stings: `roundStart` on entering a play round, `win`/`lose` on
+game over. All guarded for reduced motion.
+
+## 2026-06-17 — Theme description shown over the grid during play
+
+`home.tsx` now renders `theme.description` as a centered, readable line between the `Scoreboard`
+and the `Grid` on the play/reveal screen (it was previously only visible in `GamePicker`). _Why:_
+user wanted the description (e.g. "Plasser utøveren etter antall OL-gull og høyde") visible while
+placing, so the rules of the current game are readable at a glance.
+
+## 2026-06-17 — gsap.matchMedia() cleanup must live in the OUTER useGSAP return
+
+Bug fix: clicking "Lås inn" crashed with `RangeError: Maximum call stack size exceeded`
+(`_parseTransform`) at reveal. Cause: `RoundResult` returned `() => mm.revert()` from INSIDE the
+`mm.add(...)` callback. That makes `mm.revert()` invoke its own query-cleanup, which calls
+`mm.revert()` again → infinite recursion. React StrictMode's mount→cleanup→remount in dev fired it
+immediately. _Rule:_ when using `gsap.matchMedia()` inside `useGSAP`, revert it from the **outer**
+useGSAP cleanup (`return () => mm.revert()` at the end of the hook callback), never as the value
+returned by an `mm.add()` callback. (StageBackground and the logo already followed this.)

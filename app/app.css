@@ -1,15 +1,70 @@
 @import "tailwindcss";
 
 @theme {
-  --font-sans: "Inter", ui-sans-serif, system-ui, sans-serif,
-    "Apple Color Emoji", "Segoe UI Emoji", "Segoe UI Symbol", "Noto Color Emoji";
+  --font-sans:
+    "Inter", ui-sans-serif, system-ui, sans-serif, "Apple Color Emoji",
+    "Segoe UI Emoji", "Segoe UI Symbol", "Noto Color Emoji";
+  --font-display: "Anton", "Inter", ui-sans-serif, system-ui, sans-serif;
+
+  /* neon stage palette — softened, less electric */
+  --color-stage: #07060f;
+  --color-stage-2: #140d24;
+  --color-neon-pink: #ef5fa3;
+  --color-neon-cyan: #5bd4ec;
+  --color-neon-lime: #a6e06a;
+  --color-neon-gold: #f0cf6f;
+  --color-neon-purple: #a978e0;
+  --color-neon-blue: #6f93e8;
 }
 
 html,
 body {
-  @apply bg-white dark:bg-gray-950;
+  @apply text-gray-100;
+  /* deep indigo "stage floor" — intentionally NOT black so the body tag and the
+     gaps between the StageBackground gradients read as colour, not black. */
+  color-scheme: dark;
+}
 
-  @media (prefers-color-scheme: dark) {
-    color-scheme: dark;
-  }
+/* ---- neon glow helpers --------------------------------------------------- */
+/* `.text-glow` uses the element's own text color. Kept subtle on purpose. */
+.text-glow {
+  text-shadow: 0 0 8px color-mix(in srgb, currentColor 55%, transparent);
+}
+.text-glow-strong {
+  text-shadow:
+    0 0 6px color-mix(in srgb, currentColor 55%, transparent),
+    0 0 16px color-mix(in srgb, currentColor 35%, transparent);
+}
+
+/* `.box-glow` reads `--glow` (default neon-pink). Pair with a `.glow-*` class. */
+.box-glow {
+  box-shadow:
+    0 0 10px -3px
+      color-mix(in srgb, var(--glow, var(--color-neon-pink)) 60%, transparent),
+    0 0 26px -14px
+      color-mix(in srgb, var(--glow, var(--color-neon-pink)) 55%, transparent);
+}
+.glow-pink {
+  --glow: var(--color-neon-pink);
+}
+.glow-cyan {
+  --glow: var(--color-neon-cyan);
+}
+.glow-lime {
+  --glow: var(--color-neon-lime);
+}
+.glow-gold {
+  --glow: var(--color-neon-gold);
+}
+.glow-purple {
+  --glow: var(--color-neon-purple);
+}
+.glow-blue {
+  --glow: var(--color-neon-blue);
+}
+
+/* Avoid a flash of unsplit / unanimated content before GSAP entrances run.
+   Components that animate in add `.anim-init` to start hidden. */
+.anim-init {
+  visibility: hidden;
 }

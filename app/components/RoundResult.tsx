@@ -1,6 +1,11 @@
-// Reveal panel: true values + blurb, the value the player read off each axis vs.
-// the fasit (with a ✓/✗ for within slack), and (multiplayer) who won.
+// Reveal panel: compact summary of the round — the fasit per axis, what the
+// player read off (with a ✓/✗ for within slack), and the points/outcome.
+// Karaoke / neon look, kept deliberately slim so it's quick to read.
 
+import { useRef } from "react";
+
+import { gsap, useGSAP, prefersReducedMotion } from "~/anim/gsap";
+import { playSound } from "~/audio/useSound";
 import type { Card, Placement, Theme } from "~/game/types";
 import { axisDomain, fractionToValue, type PlacementScore } from "~/game/scoring";
 import { formatValue } from "~/game/format";
@@ -26,6 +31,20 @@ interface RoundResultProps {
   waiting?: boolean;
 }
 
+function Mark({ correct }: { correct: boolean }) {
+  return (
+    <span
+      className={
+        correct
+          ? "font-display text-neon-lime text-glow"
+          : "font-display text-neon-pink text-glow"
+      }
+    >
+      {correct ? "✓" : "✗"}
+    </span>
+  );
+}
+
 export function RoundResult({
   theme,
   card,
@@ -41,124 +60,160 @@ export function RoundResult({
   onNext,
   waiting,
 }: RoundResultProps) {
+  const root = useRef<HTMLDivElement>(null);
+  const pointsRef = useRef<HTMLSpanElement>(null);
+
   const xDomain = axisDomain(theme, "x");
   const yDomain = axisDomain(theme, "y");
-  const myReadX = fractionToValue(
-    myPlacement.fx,
-    xDomain.min,
-    xDomain.max,
-    theme.xAxis.scale,
-  );
-  const myReadY = fractionToValue(
-    myPlacement.fy,
-    yDomain.min,
-    yDomain.max,
-    theme.yAxis.scale,
-  );
+  const myReadX = fractionToValue(myPlacement.fx, xDomain.min, xDomain.max, theme.xAxis.scale);
+  const myReadY = fractionToValue(myPlacement.fy, yDomain.min, yDomain.max, theme.yAxis.scale);
 
   const opponentCorrect = opponentScore
     ? (opponentScore.xCorrect ? 1 : 0) + (opponentScore.yCorrect ? 1 : 0)
     : 0;
 
+  const pointsValue =
+    outcome != null ? (outcome === "win" ? 1 : 0) : (roundPoints ?? null);
+
+  useGSAP(
+    () => {
+      playSound(outcome === "win" ? "win" : outcome === "loss" ? "lose" : "reveal");
+
+      const reduced = prefersReducedMotion();
+      root.current?.scrollIntoView({
+        behavior: reduced ? "auto" : "smooth",
+        block: "center",
+      });
+
+      const runCounter = () => {
+        const el = pointsRef.current;
+        if (!el || pointsValue == null) return;
+        if (reduced) {
+          el.textContent = String(pointsValue);
+          return;
+        }
+        const obj = { n: 0 };
+        gsap.to(obj, {
+          n: pointsValue,
+          duration: 0.6,
+          ease: "power1.out",
+          snap: { n: 1 },
+          onUpdate: () => {
+            el.textContent = String(Math.round(obj.n));
+          },
+        });
+      };
+
+      if (reduced) {
+        gsap.set(root.current?.querySelectorAll(".anim-init") ?? [], { autoAlpha: 1 });
+        runCounter();
+        return;
+      }
+
+      const mm = gsap.matchMedia();
+      mm.add("(prefers-reduced-motion: no-preference)", () => {
+        const tl = gsap.timeline();
+        tl.from(root.current, {
+          autoAlpha: 0,
+          y: 24,
+          scale: 0.97,
+          duration: 0.4,
+          ease: "glide",
+        });
+        tl.fromTo(
+          ".anim-row",
+          { autoAlpha: 0, y: 10 },
+          { autoAlpha: 1, y: 0, stagger: 0.07, duration: 0.3, ease: "pop" },
+          "-=0.15",
+        );
+        tl.add(runCounter, "<");
+      });
+
+      // matchMedia must be reverted from the OUTER useGSAP cleanup (never from
+      // inside mm.add — that recurses).
+      return () => mm.revert();
+    },
+    { scope: root },
+  );
+
+  const handleNext = () => {
+    playSound("click");
+    onNext();
+  };
+
+  const outcomeClass =
+    outcome === "win" || (outcome == null && (roundPoints ?? 0) > 0)
+      ? "border-neon-lime/60 bg-neon-lime/10 text-neon-lime glow-lime"
+      : outcome === "loss"
+        ? "border-neon-pink/60 bg-neon-pink/10 text-neon-pink glow-pink"
+        : "border-neon-gold/60 bg-neon-gold/10 text-neon-gold glow-gold";
+
   return (
-    <div className="w-full max-w-md rounded-2xl border border-gray-200 bg-white p-5 shadow-xl dark:border-gray-700 dark:bg-gray-800">
-      <h2 className="text-xl font-bold text-gray-900 dark:text-white">
+    <div
+      ref={root}
+      className="anim-init w-full max-w-sm rounded-2xl border border-neon-purple/50 bg-stage-2/85 p-4 backdrop-blur box-glow glow-purple"
+    >
+      <h2 className="anim-row anim-init font-display text-xl uppercase tracking-wide text-neon-cyan text-glow">
         {card.title}
       </h2>
 
-      <div className="mt-2 flex flex-wrap gap-2 text-sm">
-        <span className="rounded-full bg-rose-100 px-2 py-0.5 font-medium text-rose-700 dark:bg-rose-900/50 dark:text-rose-200">
-          {theme.xAxis.label}: {formatValue(card.x, theme.xAxis.unit)}
+      {/* One compact row per axis: fasit, what you read, and a ✓/✗. */}
+      <div className="anim-row anim-init mt-2 flex items-center justify-between gap-3 border-t border-white/10 pt-2 text-sm">
+        <span className="text-gray-400">{theme.xAxis.label}</span>
+        <span className="flex items-center gap-2">
+          <span className="font-semibold text-neon-cyan">
+            {formatValue(card.x, theme.xAxis.unit)}
+          </span>
+          <span className="text-xs text-gray-500">
+            du: {formatValue(myReadX, theme.xAxis.unit)}
+          </span>
+          <Mark correct={myScore.xCorrect} />
         </span>
-        <span className="rounded-full bg-rose-100 px-2 py-0.5 font-medium text-rose-700 dark:bg-rose-900/50 dark:text-rose-200">
-          {theme.yAxis.label}: {formatValue(card.y, theme.yAxis.unit)}
+      </div>
+      <div className="anim-row anim-init mt-1 flex items-center justify-between gap-3 border-t border-white/10 pt-2 text-sm">
+        <span className="text-gray-400">{theme.yAxis.label}</span>
+        <span className="flex items-center gap-2">
+          <span className="font-semibold text-neon-cyan">
+            {formatValue(card.y, theme.yAxis.unit)}
+          </span>
+          <span className="text-xs text-gray-500">
+            du: {formatValue(myReadY, theme.yAxis.unit)}
+          </span>
+          <Mark correct={myScore.yCorrect} />
         </span>
       </div>
 
-      <p className="mt-3 text-sm text-gray-600 dark:text-gray-300">
-        {card.blurb}
-      </p>
-
-      <div className="mt-4 rounded-lg bg-gray-50 p-3 text-sm dark:bg-gray-900/50">
-        <div className="font-semibold text-gray-700 dark:text-gray-200">
-          Ditt svar ({myName ?? "deg"}):
+      {opponentScore && (
+        <div className="anim-row anim-init mt-2 text-xs text-gray-400">
+          {opponentName ?? "Motspiller"}: {opponentCorrect}/2 innenfor slingringsmonn
         </div>
-        <div className="text-gray-600 dark:text-gray-300">
-          {theme.xAxis.label}: du leste{" "}
-          {formatValue(myReadX, theme.xAxis.unit)} (fasit{" "}
-          {formatValue(card.x, theme.xAxis.unit)}){" "}
-          {myScore.xCorrect ? (
-            <span className="font-bold text-emerald-600 dark:text-emerald-400">
-              ✓
-            </span>
-          ) : (
-            <span className="font-bold text-rose-600 dark:text-rose-400">
-              ✗
-            </span>
-          )}
-        </div>
-        <div className="text-gray-600 dark:text-gray-300">
-          {theme.yAxis.label}: du leste{" "}
-          {formatValue(myReadY, theme.yAxis.unit)} (fasit{" "}
-          {formatValue(card.y, theme.yAxis.unit)}){" "}
-          {myScore.yCorrect ? (
-            <span className="font-bold text-emerald-600 dark:text-emerald-400">
-              ✓
-            </span>
-          ) : (
-            <span className="font-bold text-rose-600 dark:text-rose-400">
-              ✗
-            </span>
-          )}
-        </div>
+      )}
 
-        {opponentScore && (
-          <div className="mt-2 text-gray-600 dark:text-gray-300">
-            <span className="font-semibold text-gray-700 dark:text-gray-200">
-              {opponentName ?? "Motspiller"}:
-            </span>{" "}
-            {opponentCorrect}/2 innenfor slingringsmonn
-          </div>
-        )}
-      </div>
-
-      {/* Outcome */}
-      {outcome != null ? (
+      {/* Outcome / points — one compact line. */}
+      {(outcome != null || roundPoints != null) && (
         <div
-          className={[
-            "mt-4 rounded-lg p-3 text-center text-lg font-bold",
-            outcome === "win"
-              ? "bg-emerald-100 text-emerald-700 dark:bg-emerald-900/50 dark:text-emerald-200"
-              : outcome === "loss"
-                ? "bg-rose-100 text-rose-700 dark:bg-rose-900/50 dark:text-rose-200"
-                : "bg-gray-100 text-gray-700 dark:bg-gray-700 dark:text-gray-200",
-          ].join(" ")}
+          className={`anim-row anim-init mt-3 rounded-xl border px-3 py-2 text-center font-display text-lg uppercase tracking-wide box-glow ${outcomeClass}`}
         >
-          {outcome === "win"
-            ? "Du vant runden! +1 poeng"
-            : outcome === "loss"
-              ? "Du tapte runden."
-              : "Uavgjort – ingen poeng."}
+          {outcome === "loss" ? (
+            "Du tapte runden"
+          ) : outcome === "tie" ? (
+            "Uavgjort"
+          ) : (
+            <>
+              {outcome === "win" ? "Du vant! " : ""}+
+              <span ref={pointsRef}>0</span> poeng
+            </>
+          )}
         </div>
-      ) : (
-        roundPoints != null && (
-          <div className="mt-4 rounded-lg bg-indigo-100 p-3 text-center text-lg font-bold text-indigo-700 dark:bg-indigo-900/50 dark:text-indigo-200">
-            +{roundPoints} poeng
-          </div>
-        )
       )}
 
       <button
         type="button"
-        onClick={onNext}
+        onClick={handleNext}
         disabled={waiting}
-        className="mt-5 w-full rounded-xl bg-indigo-600 px-4 py-3 font-semibold text-white shadow transition hover:bg-indigo-700 disabled:cursor-not-allowed disabled:opacity-50"
+        className="anim-row anim-init mt-3 w-full rounded-xl border border-neon-purple/70 bg-neon-purple/20 px-4 py-2.5 font-display text-base uppercase tracking-wide text-neon-purple text-glow box-glow glow-purple transition hover:bg-neon-purple/30 disabled:cursor-not-allowed disabled:opacity-50"
       >
-        {waiting
-          ? "Venter på motspiller …"
-          : isLastRound
-            ? "Se resultat"
-            : "Neste runde"}
+        {waiting ? "Venter på motspiller …" : isLastRound ? "Se resultat" : "Neste runde"}
       </button>
     </div>
   );

@@ -18,6 +18,10 @@ import { RoundResult } from "~/components/RoundResult";
 import { GamePicker } from "~/components/GamePicker";
 import { ConnectionPanel } from "~/components/ConnectionPanel";
 
+import { gsap, useGSAP, SplitText, prefersReducedMotion } from "~/anim/gsap";
+import { playSound } from "~/audio/useSound";
+import { VolumeButton } from "~/audio/VolumeButton";
+
 export function meta({}: Route.MetaArgs) {
   return [
     { title: "Plasseringsspillet" },
@@ -292,18 +296,89 @@ export default function Home() {
     setScreen("setup");
   };
 
+  // --- presentation: logo + sound stings -----------------------------------
+
+  const logoRef = useRef<HTMLHeadingElement>(null);
+
+  useGSAP(
+    (_ctx, contextSafe) => {
+      const el = logoRef.current;
+      if (!el || !contextSafe) return;
+      const split = SplitText.create(el, { type: "chars", ignore: "sup" });
+
+      const mm = gsap.matchMedia();
+      mm.add("(prefers-reduced-motion: no-preference)", () => {
+        gsap.from(split.chars, {
+          autoAlpha: 0,
+          yPercent: -120,
+          rotation: () => gsap.utils.random(-45, 45),
+          stagger: { each: 0.04, from: "center" },
+          ease: "back.out(2)",
+          duration: 0.75,
+        });
+      });
+
+      // Karaoke marquee shimmer — only sweeps across the letters on hover.
+      const shimmer = contextSafe(() => {
+        if (prefersReducedMotion()) return;
+        gsap.fromTo(
+          split.chars,
+          { filter: "brightness(1)" },
+          {
+            filter: "brightness(1.55)",
+            duration: 0.32,
+            yoyo: true,
+            repeat: 1,
+            ease: "sine.inOut",
+            stagger: { each: 0.05, from: "start" },
+            overwrite: "auto",
+          },
+        );
+      });
+      el.addEventListener("pointerenter", shimmer);
+
+      return () => {
+        el.removeEventListener("pointerenter", shimmer);
+        mm.revert();
+        split.revert();
+      };
+    },
+    { scope: logoRef },
+  );
+
+  // Round-start sting whenever a new play round begins.
+  useEffect(() => {
+    if (screen === "play") playSound("roundStart");
+  }, [screen, round]);
+
+  // Final sting on game over.
+  useEffect(() => {
+    if (screen !== "gameover") return;
+    playSound(mode === "single" || myScore >= oppScore ? "win" : "lose");
+  }, [screen, mode, myScore, oppScore]);
+
   // --- render ---------------------------------------------------------------
 
   return (
-    <main className="mx-auto flex min-h-screen max-w-3xl flex-col items-center gap-6 px-4 py-8">
-      <header className="text-center">
-        <h1 className="text-3xl font-extrabold text-gray-900 dark:text-white">
-          Plasseringsspillet
-          <sup className="ml-0.5 align-super text-xl font-semibold">®™</sup>
-        </h1>
-        <p className="mt-1 text-sm text-gray-500 dark:text-gray-400">
-          Plasser mysteriekortet riktig på rutenettet.
-        </p>
+    <main className="relative mx-auto flex min-h-screen max-w-3xl flex-col items-center gap-6 px-4 py-8">
+      <header className="relative flex w-full items-center justify-center text-center">
+        <div>
+          <h1
+            ref={logoRef}
+            className="font-display text-5xl uppercase tracking-wide text-neon-pink text-glow-strong sm:text-6xl"
+          >
+            Plasseringsspillet
+            <sup className="ml-1 align-super text-2xl text-neon-cyan text-glow">
+              ®™
+            </sup>
+          </h1>
+          <p className="mt-1 text-sm text-gray-400">
+            Plasser mysteriekortet riktig på rutenettet.
+          </p>
+        </div>
+        <div className="absolute right-0 top-1/2 -translate-y-1/2">
+          <VolumeButton />
+        </div>
       </header>
 
       {screen === "setup" && (
@@ -332,14 +407,14 @@ export default function Home() {
       {screen === "lobby" && (
         <div className="w-full space-y-4">
           {mode === "guest" ? (
-            <p className="rounded-xl bg-white/70 p-4 text-center text-gray-700 dark:bg-gray-800/70 dark:text-gray-200">
+            <p className="box-glow glow-cyan rounded-xl border border-neon-cyan/40 bg-stage-2/70 p-4 text-center text-gray-200 backdrop-blur">
               Tilkoblet
               {oppName ? ` til ${oppName}` : ""}. Venter på at verten velger
               spill og starter …
             </p>
           ) : (
             <>
-              <h2 className="text-center text-xl font-bold text-gray-900 dark:text-white">
+              <h2 className="text-center font-display text-2xl uppercase tracking-wide text-neon-lime text-glow">
                 {mode === "single" ? "Velg et spill" : "Velg spill og start"}
               </h2>
               <GamePicker
@@ -367,6 +442,12 @@ export default function Home() {
             opponentScore={oppScore}
           />
 
+          {theme.description && (
+            <p className="max-w-[560px] text-center text-base text-gray-200">
+              {theme.description}
+            </p>
+          )}
+
           <Grid
             theme={theme}
             anchors={anchors}
@@ -383,20 +464,23 @@ export default function Home() {
           {screen === "play" && (
             <div className="flex flex-col items-center gap-2">
               {!myPlacement && (
-                <p className="text-sm text-gray-500 dark:text-gray-400">
+                <p className="text-sm text-gray-400">
                   Dra kortet til riktig sted på rutenettet.
                 </p>
               )}
               <button
                 type="button"
                 disabled={!myPlacement}
-                onClick={lockIn}
-                className="rounded-xl bg-indigo-600 px-6 py-3 font-semibold text-white shadow transition hover:bg-indigo-700 disabled:cursor-not-allowed disabled:opacity-50"
+                onClick={() => {
+                  playSound("lockIn");
+                  lockIn();
+                }}
+                className="box-glow glow-lime rounded-xl border-2 border-neon-lime bg-neon-lime/15 px-8 py-3 font-display text-xl uppercase tracking-wide text-neon-lime text-glow transition hover:bg-neon-lime/25 disabled:cursor-not-allowed disabled:border-gray-600 disabled:text-gray-500 disabled:opacity-50 disabled:shadow-none"
               >
                 Lås inn
               </button>
               {mode !== "single" && myPlacement && !oppPlacement && (
-                <p className="text-sm text-gray-500 dark:text-gray-400">
+                <p className="text-sm text-gray-400">
                   Venter på at {oppName || "motspilleren"} plasserer …
                 </p>
               )}
@@ -430,7 +514,7 @@ export default function Home() {
             />
           )}
           {screen === "reveal" && mode === "guest" && (
-            <p className="text-sm text-gray-500 dark:text-gray-400">
+            <p className="text-sm text-gray-400">
               Verten styrer når neste runde starter.
             </p>
           )}
@@ -438,40 +522,160 @@ export default function Home() {
       )}
 
       {screen === "gameover" && theme && (
-        <div className="w-full max-w-md space-y-4 rounded-2xl border border-gray-200 bg-white p-6 text-center shadow-xl dark:border-gray-700 dark:bg-gray-800">
-          <h2 className="text-2xl font-extrabold text-gray-900 dark:text-white">
-            Ferdig!
-          </h2>
-          <div className="space-y-1">
-            <p className="text-lg text-gray-700 dark:text-gray-200">
-              {myName || "Du"}: <span className="font-bold">{myScore}</span> poeng
-            </p>
-            {mode !== "single" && (
-              <p className="text-lg text-gray-700 dark:text-gray-200">
-                {oppName || "Motspiller"}:{" "}
-                <span className="font-bold">{oppScore}</span> poeng
-              </p>
-            )}
-            {mode !== "single" && (
-              <p className="pt-2 text-xl font-bold">
-                {myScore > oppScore
-                  ? "Du vant! 🎉"
-                  : myScore < oppScore
-                    ? `${oppName || "Motspiller"} vant.`
-                    : "Uavgjort!"}
-              </p>
-            )}
-          </div>
-          <button
-            type="button"
-            onClick={playAgain}
-            className="w-full rounded-xl bg-indigo-600 px-4 py-3 font-semibold text-white shadow transition hover:bg-indigo-700"
-          >
-            Spill igjen
-          </button>
-        </div>
+        <GameOver
+          mode={mode}
+          myName={myName || "Du"}
+          myScore={myScore}
+          oppName={oppName || "Motspiller"}
+          oppScore={oppScore}
+          onPlayAgain={playAgain}
+        />
       )}
     </main>
+  );
+}
+
+// --- game over (confetti + bouncy headline) ---------------------------------
+
+function GameOver({
+  mode,
+  myName,
+  myScore,
+  oppName,
+  oppScore,
+  onPlayAgain,
+}: {
+  mode: Mode | null;
+  myName: string;
+  myScore: number;
+  oppName: string;
+  oppScore: number;
+  onPlayAgain: () => void;
+}) {
+  const root = useRef<HTMLDivElement>(null);
+  const headingRef = useRef<HTMLHeadingElement>(null);
+
+  const won = mode === "single" || myScore >= oppScore;
+  const headline =
+    mode === "single"
+      ? "Ferdig!"
+      : myScore > oppScore
+        ? "Du vant!"
+        : myScore < oppScore
+          ? `${oppName} vant`
+          : "Uavgjort!";
+
+  useGSAP(
+    () => {
+      const reduce = prefersReducedMotion();
+
+      gsap.from(root.current, {
+        autoAlpha: 0,
+        y: 40,
+        scale: 0.9,
+        duration: reduce ? 0 : 0.6,
+        ease: "pop",
+      });
+
+      if (headingRef.current) {
+        const split = SplitText.create(headingRef.current, { type: "chars" });
+        if (!reduce) {
+          gsap.from(split.chars, {
+            autoAlpha: 0,
+            yPercent: -140,
+            rotation: () => gsap.utils.random(-50, 50),
+            stagger: { each: 0.05, from: "center" },
+            ease: "back.out(2.5)",
+            duration: 0.8,
+            delay: 0.15,
+          });
+        }
+      }
+
+      if (reduce || !won) return;
+
+      // Confetti burst from the center using Physics2D.
+      const colors = [
+        "var(--color-neon-pink)",
+        "var(--color-neon-cyan)",
+        "var(--color-neon-lime)",
+        "var(--color-neon-gold)",
+        "var(--color-neon-purple)",
+      ];
+      const layer = document.createElement("div");
+      layer.style.cssText =
+        "position:absolute;inset:0;overflow:hidden;pointer-events:none;border-radius:1rem;";
+      root.current?.appendChild(layer);
+      const pieces: HTMLElement[] = [];
+      for (let i = 0; i < 90; i++) {
+        const p = document.createElement("i");
+        p.style.cssText = `position:absolute;left:50%;top:40%;width:${
+          6 + (i % 4) * 2
+        }px;height:${10 + (i % 3) * 3}px;background:${
+          colors[i % colors.length]
+        };border-radius:2px;will-change:transform;`;
+        layer.appendChild(p);
+        pieces.push(p);
+      }
+      gsap.to(pieces, {
+        duration: 1.8,
+        physics2D: {
+          velocity: () => gsap.utils.random(350, 720),
+          angle: () => gsap.utils.random(250, 290),
+          gravity: 900,
+        },
+        rotation: () => gsap.utils.random(-360, 360),
+        autoAlpha: 0,
+        ease: "none",
+        stagger: { each: 0.004, from: "center" },
+        onComplete: () => layer.remove(),
+      });
+    },
+    { scope: root },
+  );
+
+  return (
+    <div
+      ref={root}
+      className="box-glow glow-purple w-full max-w-md space-y-4 overflow-hidden rounded-2xl border-2 border-neon-purple/60 bg-stage-2/80 p-6 text-center backdrop-blur"
+    >
+      <h2
+        ref={headingRef}
+        className={`font-display text-4xl uppercase tracking-wide text-glow-strong ${
+          won ? "text-neon-gold" : "text-neon-pink"
+        }`}
+      >
+        {headline}
+      </h2>
+      <div className="space-y-1">
+        <p className="text-lg text-gray-200">
+          {myName}:{" "}
+          <span className="font-display text-2xl text-neon-cyan text-glow">
+            {myScore}
+          </span>{" "}
+          poeng
+        </p>
+        {mode !== "single" && (
+          <p className="text-lg text-gray-200">
+            {oppName}:{" "}
+            <span className="font-display text-2xl text-neon-gold text-glow">
+              {oppScore}
+            </span>{" "}
+            poeng
+          </p>
+        )}
+      </div>
+      <button
+        type="button"
+        onClick={() => {
+          playSound("click");
+          onPlayAgain();
+        }}
+        className="box-glow glow-pink w-full rounded-xl border-2 border-neon-pink bg-neon-pink/15 px-4 py-3 font-display text-xl uppercase tracking-wide text-neon-pink text-glow transition hover:bg-neon-pink/25"
+      >
+        Spill igjen
+      </button>
+    </div>
   );
 }
 
@@ -486,10 +690,48 @@ function SetupScreen({
   setMyName: (n: string) => void;
   onChoose: (m: Mode) => void;
 }) {
+  const root = useRef<HTMLDivElement>(null);
+
+  const { contextSafe } = useGSAP(
+    () => {
+      gsap.from(".setup-item", {
+        autoAlpha: 0,
+        y: 24,
+        scale: 0.95,
+        stagger: 0.08,
+        ease: "pop",
+        duration: prefersReducedMotion() ? 0 : 0.6,
+      });
+    },
+    { scope: root },
+  );
+
+  const wiggle = contextSafe((e: React.PointerEvent) => {
+    if (prefersReducedMotion()) return;
+    gsap.fromTo(
+      e.currentTarget,
+      { rotation: -3 },
+      { rotation: 0, scale: 1.04, duration: 0.5, ease: "elastic.out(1, 0.3)" },
+    );
+  });
+  const unwiggle = contextSafe((e: React.PointerEvent) => {
+    gsap.to(e.currentTarget, { scale: 1, duration: 0.3 });
+  });
+  const choose = (m: Mode) => {
+    playSound("click");
+    onChoose(m);
+  };
+
+  const btn =
+    "setup-item box-glow w-full rounded-xl border-2 px-4 py-3 font-display text-lg uppercase tracking-wide text-glow transition-colors";
+
   return (
-    <div className="w-full max-w-md space-y-5 rounded-2xl border border-gray-200 bg-white p-6 shadow-xl dark:border-gray-700 dark:bg-gray-800">
-      <div>
-        <label className="text-sm font-semibold text-gray-700 dark:text-gray-200">
+    <div
+      ref={root}
+      className="box-glow glow-purple w-full max-w-md space-y-5 rounded-2xl border-2 border-neon-purple/50 bg-stage-2/70 p-6 backdrop-blur"
+    >
+      <div className="setup-item">
+        <label className="font-display text-sm uppercase tracking-wide text-neon-cyan text-glow">
           Navnet ditt
         </label>
         <input
@@ -497,29 +739,35 @@ function SetupScreen({
           value={myName}
           onChange={(e) => setMyName(e.target.value)}
           placeholder="F.eks. Kari"
-          className="mt-1 w-full rounded-lg border border-gray-300 bg-gray-50 p-2 dark:border-gray-600 dark:bg-gray-900 dark:text-gray-100"
+          className="mt-1 w-full rounded-lg border-2 border-neon-cyan/40 bg-stage/80 p-2 text-gray-100 placeholder:text-gray-500 focus:border-neon-cyan focus:outline-none"
         />
       </div>
 
-      <div className="space-y-2">
+      <div className="space-y-3">
         <button
           type="button"
-          onClick={() => onChoose("single")}
-          className="w-full rounded-xl bg-indigo-600 px-4 py-3 font-semibold text-white shadow transition hover:bg-indigo-700"
+          onClick={() => choose("single")}
+          onPointerEnter={wiggle}
+          onPointerLeave={unwiggle}
+          className={`${btn} glow-cyan border-neon-cyan bg-neon-cyan/10 text-neon-cyan hover:bg-neon-cyan/20`}
         >
           Spill alene
         </button>
         <button
           type="button"
-          onClick={() => onChoose("host")}
-          className="w-full rounded-xl bg-emerald-600 px-4 py-3 font-semibold text-white shadow transition hover:bg-emerald-700"
+          onClick={() => choose("host")}
+          onPointerEnter={wiggle}
+          onPointerLeave={unwiggle}
+          className={`${btn} glow-lime border-neon-lime bg-neon-lime/10 text-neon-lime hover:bg-neon-lime/20`}
         >
           Vert (inviter en venn)
         </button>
         <button
           type="button"
-          onClick={() => onChoose("guest")}
-          className="w-full rounded-xl bg-amber-600 px-4 py-3 font-semibold text-white shadow transition hover:bg-amber-700"
+          onClick={() => choose("guest")}
+          onPointerEnter={wiggle}
+          onPointerLeave={unwiggle}
+          className={`${btn} glow-gold border-neon-gold bg-neon-gold/10 text-neon-gold hover:bg-neon-gold/20`}
         >
           Gjest (bli med)
         </button>

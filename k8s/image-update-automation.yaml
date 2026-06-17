@@ -13,13 +13,14 @@ spec:
       ref:
         branch: main
     commit:
-      authorName: Flux Bot
-      authorEmail: flux@stackunderflow.no
+      author:
+        name: Flux Bot
+        email: flux@stackunderflow.no
       messageTemplate: |
         Automated image update
 
         Images:
-        {{ range .Updated.Images -}}
+        {{ range .Changed.Images -}}
         - {{.}}
         {{ end -}}
     push:

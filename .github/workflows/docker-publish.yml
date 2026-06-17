@@ -34,13 +34,6 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Generate Flux sortable build tag
-        id: buildtag
-        run: |
-          TS=$(date -u +%Y%m%d%H%M%S)
-          SHA=${GITHUB_SHA::7}
-          echo "tag=0.0.0-${TS}.${SHA}" >> "$GITHUB_OUTPUT"
-
       - name: Extract image metadata (tags, labels)
         id: meta
         uses: docker/metadata-action@v5
@@ -49,7 +42,6 @@ jobs:
           tags: |
             type=sha,format=long
             type=raw,value=latest,enable={{is_default_branch}}
-            type=raw,value=${{ steps.buildtag.outputs.tag }}
 
       - name: Build and push image
         uses: docker/build-push-action@v6

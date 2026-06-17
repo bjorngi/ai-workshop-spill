@@ -275,3 +275,21 @@ The Dockerfile is now a two-stage Node build that runs `react-router-serve` on `
 deleted since the Node server handles SPA fallback + asset serving. The k8s Deployment keeps
 `replicas: 1` because the in-memory signaling mailbox and host-relay hub are not horizontally
 scalable without sticky sessions or a shared store; memory limit bumped 256Mi → 384Mi for Node.
+
+## 2026-06-17 — Dropped WebRTC for a server-relayed HTTP transport
+
+WebRTC only connects directly when NAT allows it: peers behind symmetric NAT (mobile/CGNAT/many
+corporate networks) could never establish a data channel with STUN alone, and the only fix would
+have been running a TURN relay. Since we already run a Node server, we replaced WebRTC entirely
+with a **server-relayed transport** over plain HTTPS: every client connects only outbound to our
+server, so it works on any network with zero NAT traversal. `PeerLink`/`webrtc.ts` and the
+offer/answer signaling mailbox (`roomSignaling.ts`) were deleted.
+
+The relay is `app/routes/api.room.$code.ts`: members **long-poll** `GET /api/room/:code?pid=…`
+(the request blocks up to 20s until a message is queued, then returns immediately) and **POST**
+`{kind:"send", pid, msg}` messages that the server fans out to the other members. The server now
+owns the **roster** (membership tracked via presence: a member is dropped after 35s without a
+poll) and pushes a `roster` message on every change — so the `hello` message was removed. The
+host stays authoritative at the game level (drives start/next, relays placements); the server is
+just a dumb relay. Still in-memory + `replicas: 1` (same constraint). _Why:_ "works on every
+network" beat "stays peer-to-peer" — for a turn-based game the relay latency is invisible.

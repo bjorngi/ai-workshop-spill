@@ -1,25 +1,16 @@
-// Room manager for N-player WebRTC over a star (host-relay) topology.
+// Room manager for N-player multiplayer over a server-relayed HTTP transport.
 //
-// One host, many guests. Each guest holds a single RTCDataChannel to the host
-// (a PeerLink). The host holds one PeerLink per guest, relays gameplay, and owns
-// the roster. Offer/answer blobs are ferried through the in-memory signaling
-// mailbox (roomSignaling.ts) keyed by a short room code.
+// No WebRTC: every client connects only OUTBOUND to our own server, so it works
+// on any network with no NAT traversal / STUN / TURN. Each client long-polls
+// GET /api/room/:code for messages and POSTs messages that the server fans out
+// to the other room members (see app/routes/api.room.$code.ts).
 //
-// PeerLink (app/net/webrtc.ts) is reused unchanged as the single-connection
-// primitive; this module just orchestrates many of them.
+// The host is still authoritative at the game level (drives start/next, relays
+// placements); the server is just a dumb message relay + roster keeper.
 
 import { useCallback, useEffect, useRef, useState } from "react";
 
 import type { NetMessage, PlayerInfo } from "~/game/types";
-import { PeerLink, type ConnState } from "~/net/webrtc";
-import {
-  fetchRoom,
-  joinRoom as joinRoomSignal,
-  openRoom,
-  pollRoom,
-  postAnswer,
-  postOffer,
-} from "~/net/roomSignaling";
 
 export type RoomStatus = "idle" | "connecting" | "connected" | "failed" | "closed";
 
@@ -45,13 +36,17 @@ function makeId(): string {
   return Math.random().toString(36).slice(2, 10);
 }
 
-/** Sleep that rejects when aborted (host accept-loop pacing). */
+function roomUrl(code: string): string {
+  return `/api/room/${encodeURIComponent(code)}`;
+}
+
+/** Sleep that resolves early (does not reject) when aborted. */
 function sleep(ms: number, signal: AbortSignal): Promise<void> {
-  return new Promise((resolve, reject) => {
-    if (signal.aborted) return reject(new DOMException("Aborted", "AbortError"));
+  return new Promise((resolve) => {
+    if (signal.aborted) return resolve();
     const onAbort = () => {
       clearTimeout(timer);
-      reject(new DOMException("Aborted", "AbortError"));
+      resolve();
     };
     const timer = setTimeout(() => {
       signal.removeEventListener("abort", onAbort);
@@ -61,18 +56,9 @@ function sleep(ms: number, signal: AbortSignal): Promise<void> {
   });
 }
 
-function guestStatus(s: ConnState): RoomStatus {
-  if (s === "connected") return "connected";
-  if (s === "failed") return "failed";
-  if (s === "closed") return "closed";
-  return "connecting";
-}
-
-interface HostGuest {
-  link: PeerLink;
-  name?: string;
-  open: boolean;
-  answered: boolean;
+interface Relayed {
+  from: string;
+  msg: NetMessage;
 }
 
 /** Imperative core, kept out of React so it survives re-renders. */
@@ -84,23 +70,12 @@ class RoomManager {
   status: RoomStatus = "idle";
   roster: PlayerInfo[] = [];
 
-  /** Gameplay messages (not hello/roster) are forwarded here. */
+  /** Gameplay messages (not roster) are forwarded here. */
   onMessage: ((msg: NetMessage, fromPid: string) => void) | null = null;
   /** Notify React that status/roster changed. */
   onChange: (() => void) | null = null;
 
   private abort = new AbortController();
-  private guests = new Map<string, HostGuest>(); // host only
-  private link: PeerLink | null = null; // guest only
-
-  get connectedCount(): number {
-    if (this.role === "host") {
-      let n = 0;
-      for (const g of this.guests.values()) if (g.open) n++;
-      return n;
-    }
-    return this.link && this.status === "connected" ? 1 : 0;
-  }
 
   private setStatus(s: RoomStatus): void {
     if (this.status === s) return;
@@ -112,159 +87,90 @@ class RoomManager {
     this.onChange?.();
   }
 
-  // --- HOST ----------------------------------------------------------------
+  private async post(payload: Record<string, unknown>): Promise<void> {
+    const res = await fetch(roomUrl(this.code), {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+    if (!res.ok) {
+      const data = (await res.json().catch(() => ({}))) as { error?: string };
+      throw new Error(data.error ?? `http-${res.status}`);
+    }
+  }
+
+  // --- lifecycle -----------------------------------------------------------
 
   async hostRoom(code: string, name: string): Promise<void> {
     this.role = "host";
-    this.code = code;
-    this.myName = name;
     this.myPid = HOST_PID;
+    this.myName = name;
+    this.code = code;
     this.roster = [{ pid: HOST_PID, name }];
     this.setStatus("connecting");
-    try {
-      await openRoom(code);
-    } catch {
-      this.setStatus("failed");
-      throw new Error("Kunne ikke åpne rom");
-    }
-    this.setStatus("connected"); // room is live; waiting for guests
-    void this.runHostLoop();
+    await this.post({ kind: "open", pid: HOST_PID, name, role: "host" });
+    this.setStatus("connected");
+    void this.pollLoop();
   }
 
-  private async runHostLoop(): Promise<void> {
+  async joinRoom(code: string, name: string): Promise<void> {
+    this.role = "guest";
+    this.myPid = makeId();
+    this.myName = name;
+    this.code = code;
+    this.roster = [{ pid: this.myPid, name }];
+    this.setStatus("connecting");
+    // Throws "no-room" (wrong code) or "locked" (game already started).
+    await this.post({ kind: "join", pid: this.myPid, name, role: "guest" });
+    this.setStatus("connected");
+    void this.pollLoop();
+  }
+
+  private async pollLoop(): Promise<void> {
     const signal = this.abort.signal;
     while (!signal.aborted) {
       try {
-        const room = await fetchRoom(this.code, signal);
-        if (room) {
-          for (const [gid, slot] of Object.entries(room.guests)) {
-            const existing = this.guests.get(gid);
-            if (!existing) {
-              void this.connectGuest(gid);
-            } else if (!existing.answered && slot.answer) {
-              existing.answered = true;
-              existing.link.acceptAnswer(slot.answer).catch(() => {});
-            }
-          }
+        const res = await fetch(`${roomUrl(this.code)}?pid=${encodeURIComponent(this.myPid)}`, {
+          signal,
+        });
+        if (res.status === 404) {
+          this.setStatus("closed");
+          return;
         }
-        await sleep(1500, signal);
+        if (!res.ok) {
+          await sleep(1000, signal);
+          continue;
+        }
+        const data = (await res.json()) as { messages?: Relayed[] };
+        for (const { from, msg } of data.messages ?? []) {
+          this.dispatch(msg, from);
+        }
       } catch {
-        return; // aborted
+        if (signal.aborted) return;
+        await sleep(1000, signal);
       }
     }
   }
 
-  private async connectGuest(gid: string): Promise<void> {
-    const link = new PeerLink();
-    const entry: HostGuest = { link, open: false, answered: false };
-    this.guests.set(gid, entry); // claim slot synchronously
+  // --- messaging -----------------------------------------------------------
 
-    link.onMessage = (msg) => this.dispatch(msg, gid);
-    link.onOpen = () => {
-      entry.open = true;
-      this.emit();
-    };
-    link.onStateChange = (s) => {
-      if (s === "failed" || s === "closed") {
-        entry.open = false;
-        this.refreshHostRoster();
-      }
-    };
-
-    try {
-      const offer = await link.createOffer();
-      await postOffer(this.code, gid, offer);
-    } catch {
-      this.guests.delete(gid);
-    }
+  /** Host → all guests. (Server fans out to every other member.) */
+  broadcast(msg: NetMessage): void {
+    void this.post({ kind: "send", pid: this.myPid, msg }).catch(() => {});
   }
 
-  private refreshHostRoster(): void {
-    const list: PlayerInfo[] = [{ pid: HOST_PID, name: this.myName }];
-    for (const [gid, g] of this.guests) {
-      if (g.open && g.name) list.push({ pid: gid, name: g.name });
-    }
-    this.roster = list;
-    this.broadcast({ type: "roster", players: list });
-    this.emit();
+  /** Guest → host. (Same transport; guests ignore each other's messages.) */
+  sendToHost(msg: NetMessage): void {
+    void this.post({ kind: "send", pid: this.myPid, msg }).catch(() => {});
   }
 
   /** Stop accepting new guests (called when the game starts). */
   stopAccepting(): void {
-    this.abort.abort();
+    void this.post({ kind: "lock", pid: this.myPid }).catch(() => {});
   }
 
-  broadcast(msg: NetMessage): void {
-    for (const g of this.guests.values()) {
-      if (g.open) {
-        try {
-          g.link.send(msg);
-        } catch {
-          /* channel not open */
-        }
-      }
-    }
-  }
-
-  // --- GUEST ---------------------------------------------------------------
-
-  async joinRoom(code: string, name: string): Promise<void> {
-    this.role = "guest";
-    this.code = code;
-    this.myName = name;
-    this.myPid = makeId();
-    this.roster = [{ pid: this.myPid, name }];
-    this.setStatus("connecting");
-
-    await joinRoomSignal(code, this.myPid); // throws SignalError("no-room") on bad code
-
-    const link = new PeerLink();
-    this.link = link;
-    link.onMessage = (msg) => this.dispatch(msg, HOST_PID);
-    link.onStateChange = (s) => this.setStatus(guestStatus(s));
-    link.onOpen = () => {
-      this.setStatus("connected");
-      try {
-        link.send({ type: "hello", name: this.myName });
-      } catch {
-        /* ignore */
-      }
-    };
-
-    const room = await pollRoom(
-      code,
-      (r) => !!r.guests[this.myPid]?.offer,
-      this.abort.signal,
-    );
-    const offer = room.guests[this.myPid]!.offer!;
-    const answer = await link.acceptOffer(offer);
-    await postAnswer(code, this.myPid, answer);
-    // Channel open + hello happen via link.onOpen.
-  }
-
-  sendToHost(msg: NetMessage): void {
-    try {
-      this.link?.send(msg);
-    } catch {
-      /* not open */
-    }
-  }
-
-  // --- shared --------------------------------------------------------------
-
-  /** Handle roster/hello internally; forward gameplay to onMessage. */
   private dispatch(msg: NetMessage, fromPid: string): void {
-    if (msg.type === "hello") {
-      // Host: a guest announced its name.
-      const g = this.guests.get(fromPid);
-      if (g) {
-        g.name = msg.name;
-        this.refreshHostRoster();
-      }
-      return;
-    }
     if (msg.type === "roster") {
-      // Guest: authoritative roster from the host.
       this.roster = msg.players;
       this.emit();
       return;
@@ -272,14 +178,21 @@ class RoomManager {
     this.onMessage?.(msg, fromPid);
   }
 
+  get connectedCount(): number {
+    return Math.max(0, this.roster.length - 1);
+  }
+
   reset(): void {
     this.abort.abort();
-    if (this.link) {
-      this.link.close();
-      this.link = null;
+    if (this.code && this.myPid) {
+      // Best-effort leave so the roster updates for everyone else.
+      void fetch(roomUrl(this.code), {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ kind: "leave", pid: this.myPid }),
+        keepalive: true,
+      }).catch(() => {});
     }
-    for (const g of this.guests.values()) g.link.close();
-    this.guests.clear();
     this.role = null;
     this.roster = [];
     this.status = "idle";

@@ -75,16 +75,16 @@ export interface PlacementEntry {
 /**
  * Messages exchanged over the RTCDataChannels (JSON-serialized). Topology is a
  * star: every guest holds one channel to the host. Guests send `hello`/`place`
- * to the host; the host broadcasts the authoritative `roster`/`start`/
- * `placements`/`next` relays to everyone. Round winners are computed locally and
- * deterministically on every client (everyone has all placements + the theme
- * truth), so no authoritative score message is needed.
+ * to the host; the host broadcasts the authoritative `start`/`placements`/`next`
+ * relays to everyone. The `roster` message is emitted by the relay server itself
+ * (it tracks membership). Round winners are computed locally and deterministically
+ * on every client (everyone has all placements + the theme truth), so no
+ * authoritative score message is needed.
  */
 export type NetMessage =
   // guest -> host
-  | { type: "hello"; name: string }
   | { type: "place"; round: number; placement: Placement }
-  // host -> all guests
+  // server -> all (membership) / host -> all guests
   | { type: "roster"; players: PlayerInfo[] }
   | {
       type: "start";

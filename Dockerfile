@@ -1,22 +1,25 @@
-FROM node:20-alpine AS development-dependencies-env
-COPY . /app
+# syntax=docker/dockerfile:1
+
+# --- Build the SPA static assets ---------------------------------------------
+FROM node:20-alpine AS build
 WORKDIR /app
+
+# Install deps against the lockfile first for better layer caching.
+COPY package.json package-lock.json ./
 RUN npm ci
 
-FROM node:20-alpine AS production-dependencies-env
-COPY ./package.json package-lock.json /app/
-WORKDIR /app
-RUN npm ci --omit=dev
-
-FROM node:20-alpine AS build-env
-COPY . /app/
-COPY --from=development-dependencies-env /app/node_modules /app/node_modules
-WORKDIR /app
+# Build the client bundle. With ssr:false, React Router emits a static SPA into
+# build/client (index.html + hashed assets); there is no server to run.
+COPY . .
 RUN npm run build
 
-FROM node:20-alpine
-COPY ./package.json package-lock.json /app/
-COPY --from=production-dependencies-env /app/node_modules /app/node_modules
-COPY --from=build-env /app/build /app/build
-WORKDIR /app
-CMD ["npm", "run", "start"]
+# --- Serve the static client build with nginx --------------------------------
+FROM nginx:1.27-alpine AS runtime
+
+# SPA-aware config: unknown routes fall back to index.html so client-side
+# routing works on deep links / refresh.
+COPY nginx.conf /etc/nginx/conf.d/default.conf
+COPY --from=build /app/build/client /usr/share/nginx/html
+
+EXPOSE 8080
+# The base image's default CMD (nginx -g "daemon off;") starts the server.

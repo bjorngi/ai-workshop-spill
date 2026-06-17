@@ -59,6 +59,22 @@ with raw pointer events (pointerdown/move/up) for mouse + touch support, no DnD 
 (origin bottom-left). Slots are derived from these + the shared anchor set, so scoring is
 deterministic across peers regardless of each window's pixel size.
 
+## 2026-06-17 — Docker: static nginx image, not a Node server
+
+Because the app is SPA mode (ssr:false), `npm run build` emits a static client bundle in
+`build/client` and there is no server to run (`npm run start` no longer applies). The Dockerfile
+is a two-stage build: node:20-alpine builds the assets, then nginx:1.27-alpine serves
+`build/client` on port 8080 with an SPA fallback (`try_files ... /index.html`) so client-side
+routing survives deep links/refresh. See `nginx.conf`.
+
+## 2026-06-17 — CI: build + push image to GHCR on every push to main
+
+`.github/workflows/docker-publish.yml` builds the Docker image and pushes it to
+`ghcr.io/<owner>/<repo>` on every push to `main` (plus manual `workflow_dispatch`). Auth uses
+the built-in `GITHUB_TOKEN` with `packages: write`; tags are the long commit SHA and `latest`.
+Uses GitHub Actions cache (`type=gha`) to speed up rebuilds. _Note:_ the package is created
+private by default — make it public in the repo's Packages settings if anonymous pulls are needed.
+
 ## 2026-06-17 — Singleplayer mode
 
 Besides 2-player WebRTC, the game must be playable solo. Solo mode skips all networking

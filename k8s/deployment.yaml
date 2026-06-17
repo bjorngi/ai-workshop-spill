@@ -22,7 +22,7 @@ spec:
       # host-relay topology mean state lives in this single process, so we keep
       # replicas: 1 — no horizontal scaling without sticky sessions / shared store.
       - name: plasseringsspillet
-        image: ghcr.io/bjorngi/ai-workshop-spill:20260617125334-96d9d92 # {"$imagepolicy": "flux-system:plasseringsspillet"}
+        image: ghcr.io/bjorngi/ai-workshop-spill:20260617130701-ad380d1 # {"$imagepolicy": "flux-system:plasseringsspillet"}
         imagePullPolicy: IfNotPresent
         env:
         - name: PORT

@@ -15,11 +15,11 @@ spec:
       labels:
         app: plasseringsspillet
     spec:
+      imagePullSecrets:
+      - name: ghcr-pull
       containers:
       - name: plasseringsspillet
-        # Flux ImagePolicy marker — rewritten by ImageUpdateAutomation
-        # {"$imagepolicy": "flux-system:plasseringsspillet"}
-        image: ghcr.io/bjorngi/ai-workshop-spill:0.0.0-19700101000000.0000000
+        image: ghcr.io/bjorngi/ai-workshop-spill:0.0.0-19700101000000.0000000 # {"$imagepolicy": "flux-system:plasseringsspillet"}
         imagePullPolicy: IfNotPresent
         ports:
         - name: http

@@ -6,3 +6,6 @@ metadata:
 spec:
   image: ghcr.io/bjorngi/ai-workshop-spill
   interval: 1m
+  secretRef:
+    name: ghcr-pull
+  provider: generic

@@ -77,81 +77,147 @@ export function valueToFraction(
 }
 
 /**
- * Count of anchors whose valueToFraction(...) is strictly less than the given
- * fraction. This is the "slot" the player dropped into.
+ * Inverse of valueToFraction: map a fraction in [0, 1] back to a value in the
+ * domain. Used to show the player what value they "read off" the axis.
  */
-export function fractionToSlot(
+export function fractionToValue(
   fraction: number,
-  anchorValues: number[],
   min: number,
   max: number,
   scale: Scale,
 ): number {
-  let count = 0;
-  for (const v of anchorValues) {
-    if (valueToFraction(v, min, max, scale) < fraction) count++;
+  if (scale === "log") {
+    const lo = Math.log10(Math.max(min, LOG_MIN_CLAMP));
+    const hi = Math.log10(Math.max(max, LOG_MIN_CLAMP));
+    return Math.pow(10, lo + fraction * (hi - lo));
   }
-  return count;
+  return min + fraction * (max - min);
 }
 
 /**
- * Count of anchors whose raw value is strictly less than the given value.
- * This is the "true slot" the card belongs in.
+ * "Nice" tick values for an axis within [min, max]. Linear axes use a
+ * 1/2/5×10ᵏ step; log axes emit a 1-2-5 sequence across decades so a wide
+ * range yields several readable ticks (e.g. 50k/100k/200k/500k) rather than a
+ * lone power of ten.
  */
-export function trueSlot(value: number, anchorValues: number[]): number {
-  let count = 0;
-  for (const v of anchorValues) {
-    if (v < value) count++;
+export function axisTicks(
+  min: number,
+  max: number,
+  scale: Scale,
+  count = 5,
+): number[] {
+  if (!(max > min)) return [min];
+
+  if (scale === "log") {
+    const lo = Math.max(min, LOG_MIN_CLAMP);
+    const loExp = Math.floor(Math.log10(lo));
+    const hiExp = Math.ceil(Math.log10(max));
+    const ticks: number[] = [];
+    for (let e = loExp; e <= hiExp; e++) {
+      for (const m of [1, 2, 5]) {
+        const v = m * Math.pow(10, e);
+        if (v >= min && v <= max) ticks.push(v);
+      }
+    }
+    // Thin out if we somehow produced too many.
+    if (ticks.length > 8) {
+      const step = Math.ceil(ticks.length / 8);
+      return ticks.filter((_, i) => i % step === 0);
+    }
+    return ticks.length ? ticks : [min, max];
   }
-  return count;
+
+  // Linear: pick a nice step (1/2/5×10ᵏ) at least range/count.
+  const rawStep = (max - min) / count;
+  const mag = Math.pow(10, Math.floor(Math.log10(rawStep)));
+  const norm = rawStep / mag;
+  const niceNorm = norm <= 1 ? 1 : norm <= 2 ? 2 : norm <= 5 ? 5 : 10;
+  const step = niceNorm * mag;
+
+  const ticks: number[] = [];
+  const start = Math.ceil(min / step) * step;
+  for (let v = start; v <= max + step * 1e-9; v += step) {
+    // Snap away tiny floating-point dust around zero.
+    ticks.push(Math.abs(v) < step * 1e-9 ? 0 : v);
+  }
+  return ticks;
+}
+
+/** Within this fraction of an axis from the true value counts as fully correct. */
+export const SLACK = 0.1;
+/** Distance (fraction of axis) at which partial credit reaches zero. */
+const ZERO_CREDIT_DISTANCE = 0.5;
+
+/**
+ * Per-axis accuracy in [0, 1]: full credit within SLACK, fading linearly to 0
+ * at ZERO_CREDIT_DISTANCE away.
+ */
+export function axisAccuracy(distance: number): number {
+  if (distance <= SLACK) return 1;
+  return Math.max(
+    0,
+    (ZERO_CREDIT_DISTANCE - distance) / (ZERO_CREDIT_DISTANCE - SLACK),
+  );
 }
 
 export interface PlacementScore {
+  /** Distance from the true X position, in fraction space [0, 1]. */
   xError: number;
+  /** Distance from the true Y position, in fraction space [0, 1]. */
   yError: number;
+  /** xError + yError — lower is better (used for multiplayer comparison). */
   total: number;
+  /** Within the slack band on the X axis. */
+  xCorrect: boolean;
+  /** Within the slack band on the Y axis. */
+  yCorrect: boolean;
 }
 
 /**
- * Score a placement. For each axis: the true slot from the card's real value vs.
- * the player's slot derived from the dropped fraction and the anchor set. The
- * error per axis is the absolute slot difference; total is their sum.
+ * Score a placement by distance, not rank. Each axis: the player's dropped
+ * fraction vs. the card's true fraction; the error is the absolute distance in
+ * [0, 1]. Within SLACK on an axis counts as correct. Deterministic from the
+ * card + theme + placement alone (no dependence on the anchor set), so both
+ * peers compute identical results.
  *
  * Placement origin is bottom-left, so fy maps directly to the Y axis fraction.
  */
 export function scorePlacement(
   card: Card,
-  anchors: Card[],
   theme: Theme,
   placement: Placement,
 ): PlacementScore {
   const xDomain = axisDomain(theme, "x");
   const yDomain = axisDomain(theme, "y");
 
-  const anchorXValues = anchors.map((a) => a.x);
-  const anchorYValues = anchors.map((a) => a.y);
-
-  const trueXSlot = trueSlot(card.x, anchorXValues);
-  const trueYSlot = trueSlot(card.y, anchorYValues);
-
-  const playerXSlot = fractionToSlot(
-    placement.fx,
-    anchorXValues,
+  const trueFx = valueToFraction(
+    card.x,
     xDomain.min,
     xDomain.max,
     theme.xAxis.scale,
   );
-  const playerYSlot = fractionToSlot(
-    placement.fy,
-    anchorYValues,
+  const trueFy = valueToFraction(
+    card.y,
     yDomain.min,
     yDomain.max,
     theme.yAxis.scale,
   );
 
-  const xError = Math.abs(playerXSlot - trueXSlot);
-  const yError = Math.abs(playerYSlot - trueYSlot);
-  return { xError, yError, total: xError + yError };
+  const xError = Math.abs(placement.fx - trueFx);
+  const yError = Math.abs(placement.fy - trueFy);
+  return {
+    xError,
+    yError,
+    total: xError + yError,
+    xCorrect: xError <= SLACK,
+    yCorrect: yError <= SLACK,
+  };
+}
+
+/** Solo round points (0–3): both axes within slack ⇒ 3, fading with distance. */
+export function roundPoints(score: PlacementScore): number {
+  const accuracy = (axisAccuracy(score.xError) + axisAccuracy(score.yError)) / 2;
+  return Math.round(3 * accuracy);
 }
 
 /** Lower total wins. Equal totals tie. */

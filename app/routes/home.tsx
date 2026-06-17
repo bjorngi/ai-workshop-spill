@@ -6,6 +6,7 @@ import { buildDeck, cardsByIds } from "~/game/deck";
 import { getTheme } from "~/game/themes";
 import {
   compareScores,
+  roundPoints,
   scorePlacement,
   type PlacementScore,
 } from "~/game/scoring";
@@ -35,11 +36,6 @@ type Screen =
   | "play"
   | "reveal"
   | "gameover";
-
-/** Solo scoring: perfect placement = 3 points, degrades by slot error. */
-function soloRoundPoints(score: PlacementScore): number {
-  return Math.max(0, 3 - score.total);
-}
 
 export default function Home() {
   const peer = usePeer();
@@ -172,8 +168,8 @@ export default function Home() {
   const lockIn = () => {
     if (!myPlacement || !theme || !current) return;
     if (mode === "single") {
-      const score = scorePlacement(current, anchors, theme, myPlacement);
-      setMyScore((s) => s + soloRoundPoints(score));
+      const score = scorePlacement(current, theme, myPlacement);
+      setMyScore((s) => s + roundPoints(score));
       setScreen("reveal");
     } else {
       // Multiplayer: send placement; reveal happens when both are in.
@@ -188,11 +184,11 @@ export default function Home() {
   // Compute current round's scores at reveal.
   const myRoundScore: PlacementScore | null =
     current && theme && myPlacement
-      ? scorePlacement(current, anchors, theme, myPlacement)
+      ? scorePlacement(current, theme, myPlacement)
       : null;
   const oppRoundScore: PlacementScore | null =
     current && theme && oppPlacement && mode !== "single"
-      ? scorePlacement(current, anchors, theme, oppPlacement)
+      ? scorePlacement(current, theme, oppPlacement)
       : null;
 
   // Award the multiplayer point exactly once when we enter reveal.
@@ -406,15 +402,17 @@ export default function Home() {
             </div>
           )}
 
-          {screen === "reveal" && myRoundScore && (
+          {screen === "reveal" && myRoundScore && myPlacement && (
             <RoundResult
               theme={theme}
               card={current}
               myScore={myRoundScore}
+              myPlacement={myPlacement}
               roundPoints={
-                mode === "single" ? soloRoundPoints(myRoundScore) : undefined
+                mode === "single" ? roundPoints(myRoundScore) : undefined
               }
               opponentScore={oppRoundScore}
+              opponentPlacement={mode === "single" ? null : oppPlacement}
               outcome={
                 mode === "single" || !oppRoundScore
                   ? null
